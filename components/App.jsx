@@ -74,6 +74,15 @@ export default function App() {
   const [modelReady, setModelReady] = useState(false);
   const [, forceUpdate] = useState(0);
 
+  // 카메라 선택
+  const [cameras, setCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("swim_camera_id") || "";
+    }
+    return "";
+  });
+
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
 
@@ -147,12 +156,43 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════
   // 카메라 제어
   // ═══════════════════════════════════════════════════════════
+
+  // 카메라 목록 가져오기
+  async function loadCameras() {
+    try {
+      // 권한 요청을 위해 임시로 미디어 스트림 획득
+      const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      tempStream.getTracks().forEach(t => t.stop());
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === "videoinput");
+      setCameras(videoDevices);
+
+      // 저장된 카메라가 없거나 유효하지 않으면 첫 번째 카메라 선택
+      if (!selectedCameraId || !videoDevices.find(d => d.deviceId === selectedCameraId)) {
+        if (videoDevices.length > 0) {
+          setSelectedCameraId(videoDevices[0].deviceId);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load cameras:", err);
+    }
+  }
+
+  // 초기 카메라 목록 로드
+  useEffect(() => {
+    loadCameras();
+  }, []);
+
   async function startCamera() {
     if (streamRef.current) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 1280 } },
-      });
+      const constraints = {
+        video: selectedCameraId
+          ? { deviceId: { exact: selectedCameraId }, width: { ideal: 720 }, height: { ideal: 1280 } }
+          : { facingMode: "user", width: { ideal: 720 }, height: { ideal: 1280 } },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -1006,6 +1046,55 @@ export default function App() {
         <div className="page-header">
           <h1>⚙️ 설정</h1>
           <p>앱 설정 및 데이터 관리</p>
+        </div>
+
+        {/* 카메라 설정 */}
+        <div className="settings-section">
+          <h3>카메라 설정</h3>
+          <div className="setting-item">
+            <span className="setting-icon">📷</span>
+            <div className="setting-text">
+              <h4>카메라 선택</h4>
+              <p>사용할 카메라를 선택하세요</p>
+            </div>
+          </div>
+          <select
+            value={selectedCameraId}
+            onChange={(e) => {
+              const newId = e.target.value;
+              setSelectedCameraId(newId);
+              localStorage.setItem("swim_camera_id", newId);
+              showToast("카메라가 변경되었습니다");
+            }}
+            style={{
+              width: "100%",
+              padding: "12px",
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              color: "var(--text)",
+              fontSize: "14px",
+              marginTop: "8px",
+              cursor: "pointer",
+            }}
+          >
+            {cameras.length === 0 ? (
+              <option value="">카메라를 찾는 중...</option>
+            ) : (
+              cameras.map((cam, idx) => (
+                <option key={cam.deviceId} value={cam.deviceId}>
+                  {cam.label || `카메라 ${idx + 1}`}
+                </option>
+              ))
+            )}
+          </select>
+          <button
+            className="setting-btn"
+            style={{ marginTop: "12px" }}
+            onClick={loadCameras}
+          >
+            🔄 카메라 목록 새로고침
+          </button>
         </div>
 
         {/* 데이터 관리 */}
