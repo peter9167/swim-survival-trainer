@@ -815,7 +815,13 @@ export default function App() {
             playsInline
             muted
             style={{
-              transform: `scaleX(-1) rotate(${cameraRotation}deg)`,
+              transform: `translate(-50%, -50%) scaleX(-1) rotate(${cameraRotation}deg)`,
+              // 90도/270도 회전 시: 원본 height(=회전 후 가로)를 컨테이너 width에 맞춤
+              // 비디오의 height를 컨테이너 width로 설정 (회전 후 가로가 됨)
+              // min(100vw, 430px)는 앱 프레임 max-width와 동일
+              ...(cameraRotation === 90 || cameraRotation === 270
+                ? { width: "auto", height: "min(100vw, 430px)", maxWidth: "none", maxHeight: "none" }
+                : {}),
             }}
           />
           <canvas
