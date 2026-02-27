@@ -82,6 +82,12 @@ export default function App() {
     }
     return "";
   });
+  const [cameraRotation, setCameraRotation] = useState(() => {
+    if (typeof window !== "undefined") {
+      return parseInt(localStorage.getItem("swim_camera_rotation") || "0");
+    }
+    return 0;
+  });
 
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
@@ -803,8 +809,21 @@ export default function App() {
           className={`camera-container ${session?.done ? "completed" : ""}`}
           ref={cameraContainerRef}
         >
-          <video ref={videoRef} autoPlay playsInline muted />
-          <canvas ref={canvasRef} />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{
+              transform: `scaleX(-1) rotate(${cameraRotation}deg)`,
+            }}
+          />
+          <canvas
+            ref={canvasRef}
+            style={{
+              transform: `rotate(${cameraRotation}deg)`,
+            }}
+          />
 
           {/* FPS */}
           {cameraActive && <div className="fps-badge">FPS: {fps}</div>}
@@ -1095,6 +1114,36 @@ export default function App() {
           >
             🔄 카메라 목록 새로고침
           </button>
+
+          {/* 카메라 회전 */}
+          <div className="setting-item" style={{ marginTop: "16px" }}>
+            <span className="setting-icon">🔄</span>
+            <div className="setting-text">
+              <h4>카메라 회전</h4>
+              <p>카메라가 세로로 설치된 경우 회전</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+            {[0, 90, 180, 270].map((deg) => (
+              <button
+                key={deg}
+                className="setting-btn"
+                style={{
+                  flex: 1,
+                  background: cameraRotation === deg ? "var(--accent)" : "var(--card)",
+                  color: cameraRotation === deg ? "var(--bg)" : "var(--text)",
+                  marginBottom: 0,
+                }}
+                onClick={() => {
+                  setCameraRotation(deg);
+                  localStorage.setItem("swim_camera_rotation", deg.toString());
+                  showToast(`카메라 ${deg}° 회전`);
+                }}
+              >
+                {deg}°
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* 데이터 관리 */}

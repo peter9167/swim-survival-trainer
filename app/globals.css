@@ -486,7 +486,7 @@ html, body {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  /* transform은 App.jsx에서 동적으로 설정 (회전 + 미러링) */
 }
 
 .camera-container canvas {
