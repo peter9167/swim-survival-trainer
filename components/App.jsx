@@ -5,7 +5,13 @@ import { MOTIONS } from "@/lib/motions";
 import { extractFeatures } from "@/lib/features";
 import { KNNClassifier } from "@/lib/knn";
 import { PracticeSession } from "@/lib/session";
-import { evaluatePose, evaluateReadyPose, FeedbackHistory } from "@/lib/feedback";
+import { evaluatePose, FeedbackHistory } from "@/lib/feedback";
+import {
+  getSchools,
+  createSchool,
+  verifyAdminPassword,
+  DEFAULT_SCHOOL_ID,
+} from "@/lib/supabase";
 
 // 스켈레톤 연결선
 const CONNECTIONS = [
@@ -89,6 +95,17 @@ export default function App() {
     return 0;
   });
 
+  // 학교/관리자 상태
+  const [schools, setSchools] = useState([]);
+  const [selectedSchoolId, setSelectedSchoolId] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("swim_school_id") || "";
+    }
+    return "";
+  });
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
+
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
 
@@ -116,14 +133,38 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════
   useEffect(() => {
     async function init() {
-      // KNN 분류기 로드
+      // KNN 분류기 초기화
       for (let i = 1; i <= 6; i++) {
         classifiersRef.current[i] = new KNNClassifier(5);
-        const saved = localStorage.getItem(`swim_knn_${i}`);
-        if (saved) {
-          classifiersRef.current[i].import(saved);
+      }
+
+      // 학교 목록 로드
+      try {
+        const schoolList = await getSchools();
+        setSchools(schoolList);
+      } catch (err) {
+        console.error("Failed to load schools:", err);
+      }
+
+      // Supabase에서 학습 데이터 로드
+      const savedSchoolId = localStorage.getItem("swim_school_id") || "";
+      try {
+        // 각 동작별로 데이터 로드
+        for (let i = 1; i <= 6; i++) {
+          await classifiersRef.current[i].loadFromSupabase(savedSchoolId || null);
+        }
+        console.log("Training data loaded from Supabase");
+      } catch (err) {
+        console.error("Failed to load training data:", err);
+        // 오프라인 fallback: localStorage에서 로드
+        for (let i = 1; i <= 6; i++) {
+          const saved = localStorage.getItem(`swim_knn_${i}`);
+          if (saved) {
+            classifiersRef.current[i].import(saved);
+          }
         }
       }
+      setDataLoading(false);
 
       // MediaPipe 로드
       const vision = await import("@mediapipe/tasks-vision");
@@ -369,17 +410,35 @@ export default function App() {
     }, 2500);
   }
 
-  function recordSample() {
+  async function recordSample() {
     if (!lastPoseRef.current || !currentMotion) return;
     const m = MOTIONS[currentMotion];
     const stepName = m.steps[selectedStep];
     const features = extractFeatures(lastPoseRef.current);
     const clf = classifiersRef.current[currentMotion];
-    clf.addSample(stepName, features);
-    localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
 
-    const cnt = clf.getSampleCounts()[stepName] || 0;
-    addFlash(`${stepName} 녹화! (${cnt}개)`);
+    // 관리자 모드일 때만 Supabase에 저장
+    if (isAdmin && selectedSchoolId) {
+      const success = await clf.addSampleToSupabase(
+        currentMotion.toString(),
+        selectedStep,
+        features,
+        selectedSchoolId
+      );
+      if (success) {
+        const cnt = clf.getMotionSampleCounts(currentMotion.toString())[selectedStep] || 0;
+        addFlash(`${stepName} 녹화! (${cnt}개)`);
+      } else {
+        showToast("저장 실패", "error");
+      }
+    } else {
+      // 비관리자: localStorage에만 저장 (기존 방식)
+      clf.addSample(stepName, features);
+      localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
+      const cnt = clf.getSampleCounts()[stepName] || 0;
+      addFlash(`${stepName} 녹화! (${cnt}개)`);
+    }
+
     forceUpdate(n => n + 1);
   }
 
@@ -938,6 +997,15 @@ export default function App() {
           자세를 취하고 <b style={{ color: "var(--accent)" }}>녹화</b> 버튼을 눌러 저장하세요.
           단계별 10~15개 권장.
         </p>
+        {isAdmin ? (
+          <p className="record-info" style={{ color: "var(--success)", marginTop: "8px" }}>
+            🔐 관리자 모드: 서버에 저장됩니다
+          </p>
+        ) : (
+          <p className="record-info" style={{ color: "var(--text2)", marginTop: "8px" }}>
+            💾 로컬 저장 (이 기기에서만 사용)
+          </p>
+        )}
       </div>
     );
   }
@@ -1064,6 +1132,66 @@ export default function App() {
     );
   }
 
+  // 학교 관리자 로그인
+  async function handleAdminLogin(schoolId, password) {
+    try {
+      const valid = await verifyAdminPassword(schoolId, password);
+      if (valid) {
+        setIsAdmin(true);
+        setSelectedSchoolId(schoolId);
+        localStorage.setItem("swim_school_id", schoolId);
+        showToast("관리자 로그인 성공");
+
+        // 해당 학교 데이터 다시 로드
+        setDataLoading(true);
+        for (let i = 1; i <= 6; i++) {
+          await classifiersRef.current[i].loadFromSupabase(schoolId);
+        }
+        setDataLoading(false);
+        forceUpdate(n => n + 1);
+      } else {
+        showToast("비밀번호가 틀립니다", "error");
+      }
+    } catch (err) {
+      console.error("Admin login failed:", err);
+      showToast("로그인 실패", "error");
+    }
+  }
+
+  // 학교 생성
+  async function handleCreateSchool(name, password) {
+    try {
+      const newSchool = await createSchool(name, password);
+      setSchools(prev => [...prev, newSchool]);
+      showToast(`'${name}' 학교가 생성되었습니다`);
+      return newSchool;
+    } catch (err) {
+      console.error("Create school failed:", err);
+      if (err.message?.includes("duplicate")) {
+        showToast("이미 존재하는 학교명입니다", "error");
+      } else {
+        showToast("학교 생성 실패", "error");
+      }
+      return null;
+    }
+  }
+
+  // 학교 선택 (일반 사용자)
+  async function handleSchoolSelect(schoolId) {
+    setSelectedSchoolId(schoolId);
+    setIsAdmin(false);
+    localStorage.setItem("swim_school_id", schoolId);
+
+    // 해당 학교 데이터 로드
+    setDataLoading(true);
+    for (let i = 1; i <= 6; i++) {
+      await classifiersRef.current[i].loadFromSupabase(schoolId || null);
+    }
+    setDataLoading(false);
+    forceUpdate(n => n + 1);
+    showToast(schoolId ? "학교 데이터 로드 완료" : "기본 데이터 로드 완료");
+  }
+
   // 설정 탭
   function renderSettingsTab() {
     return (
@@ -1071,6 +1199,100 @@ export default function App() {
         <div className="page-header">
           <h1>⚙️ 설정</h1>
           <p>앱 설정 및 데이터 관리</p>
+        </div>
+
+        {/* 학교 설정 */}
+        <div className="settings-section">
+          <h3>학교 설정</h3>
+
+          {/* 현재 상태 */}
+          <div className="setting-item">
+            <span className="setting-icon">🏫</span>
+            <div className="setting-text">
+              <h4>현재 학교</h4>
+              <p>
+                {selectedSchoolId
+                  ? schools.find(s => s.id === selectedSchoolId)?.name || "알 수 없음"
+                  : "기본 (개발자 제공)"}
+                {isAdmin && " (관리자)"}
+              </p>
+            </div>
+          </div>
+
+          {/* 학교 선택 */}
+          <select
+            value={selectedSchoolId}
+            onChange={(e) => handleSchoolSelect(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "12px",
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              color: "var(--text)",
+              fontSize: "14px",
+              marginTop: "8px",
+              cursor: "pointer",
+            }}
+          >
+            <option value="">기본 (개발자 제공 데이터)</option>
+            {schools.filter(s => s.id !== DEFAULT_SCHOOL_ID).map((school) => (
+              <option key={school.id} value={school.id}>
+                {school.name}
+              </option>
+            ))}
+          </select>
+
+          {/* 관리자 로그인 */}
+          {selectedSchoolId && !isAdmin && (
+            <button
+              className="setting-btn"
+              style={{ marginTop: "12px" }}
+              onClick={() => {
+                const password = prompt("관리자 비밀번호를 입력하세요:");
+                if (password) {
+                  handleAdminLogin(selectedSchoolId, password);
+                }
+              }}
+            >
+              🔐 관리자 로그인
+            </button>
+          )}
+
+          {/* 관리자 로그아웃 */}
+          {isAdmin && (
+            <button
+              className="setting-btn"
+              style={{ marginTop: "12px" }}
+              onClick={() => {
+                setIsAdmin(false);
+                showToast("관리자 로그아웃");
+              }}
+            >
+              🔓 관리자 로그아웃
+            </button>
+          )}
+
+          {/* 학교 생성 */}
+          <button
+            className="setting-btn"
+            style={{ marginTop: "8px" }}
+            onClick={() => {
+              const name = prompt("새 학교 이름을 입력하세요:");
+              if (!name) return;
+              const password = prompt("관리자 비밀번호를 설정하세요:");
+              if (!password) return;
+              handleCreateSchool(name, password);
+            }}
+          >
+            ➕ 새 학교 등록
+          </button>
+
+          {dataLoading && (
+            <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px" }}>
+              ⏳ 학습 데이터 로딩 중...
+            </p>
+          )}
         </div>
 
         {/* 카메라 설정 */}
