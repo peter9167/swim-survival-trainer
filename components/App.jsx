@@ -120,6 +120,12 @@ export default function App() {
   const rafRef = useRef(null);
   const flashRef = useRef([]);
   const streamRef = useRef(null);
+  const practiceModeRef = useRef(practiceMode);
+  const currentMotionRef = useRef(currentMotion);
+
+  // refs를 최신 상태로 동기화 (mainLoop 스테일 클로저 방지)
+  practiceModeRef.current = practiceMode;
+  currentMotionRef.current = currentMotion;
 
   // ═══════════════════════════════════════════════════════════
   // 초기화
@@ -142,18 +148,27 @@ export default function App() {
       // Supabase에서 학습 데이터 로드
       const savedSchoolId = localStorage.getItem("swim_school_id") || "";
       try {
-        // 각 동작별로 데이터 로드
         for (let i = 1; i <= 6; i++) {
           await classifiersRef.current[i].loadFromSupabase(savedSchoolId || null);
         }
         console.log("Training data loaded from Supabase");
       } catch (err) {
         console.error("Failed to load training data:", err);
-        // 오프라인 fallback: localStorage에서 로드
-        for (let i = 1; i <= 6; i++) {
-          const saved = localStorage.getItem(`swim_knn_${i}`);
-          if (saved) {
-            classifiersRef.current[i].import(saved);
+      }
+
+      // localStorage 데이터 병합 (로컬 녹화 데이터 보존)
+      for (let i = 1; i <= 6; i++) {
+        const saved = localStorage.getItem(`swim_knn_${i}`);
+        if (saved) {
+          try {
+            const localSamples = JSON.parse(saved);
+            for (const [label, features] of Object.entries(localSamples)) {
+              for (const feat of features) {
+                classifiersRef.current[i].addSample(label, feat);
+              }
+            }
+          } catch (e) {
+            console.error(`Failed to merge local data for motion ${i}:`, e);
           }
         }
       }
@@ -310,41 +325,39 @@ export default function App() {
       // 피드백 히스토리 업데이트
       feedbackHistoryRef.current.add(lms);
 
-      // 즉시 연습 모드: 규칙 기반 피드백
-      if (practiceMode === "instant" && currentMotion) {
-        const fb = evaluatePose(currentMotion, lms, feedbackHistoryRef.current);
+      const pm = practiceModeRef.current;
+      const cm = currentMotionRef.current;
+
+      // 즉시 연습 모드 또는 KNN 모드: 규칙 기반 피드백은 항상 실행
+      if ((pm === "instant" || pm === "knn") && cm) {
+        const fb = evaluatePose(cm, lms, feedbackHistoryRef.current);
         setFeedback(fb);
 
-        // 모든 체크포인트 통과 시 세션 업데이트
         const session = sessionRef.current;
-        if (session && fb.allPassed) {
-          session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
-          if (session.flashMsg && performance.now() - session.flashTime < 100) {
-            addFlash(session.flashMsg);
-            session.flashMsg = "";
+
+        if (pm === "instant") {
+          // 즉시 모드: 모든 체크포인트 통과 시 세션 업데이트
+          if (session && fb.allPassed) {
+            session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
+            if (session.flashMsg && performance.now() - session.flashTime < 100) {
+              addFlash(session.flashMsg);
+              session.flashMsg = "";
+            }
+            forceUpdate(n => n + 1);
           }
-          forceUpdate(n => n + 1);
-        }
-      }
+        } else if (pm === "knn") {
+          // KNN 모드: AI 분류 + 규칙 피드백 병행
+          const clf = classifiersRef.current[cm];
+          if (session && clf && clf.numClasses >= 2) {
+            const features = extractFeatures(lms);
+            const { label, confidence } = clf.predict(features);
+            session.update(label, confidence, timestamp / 1000);
 
-      // KNN 연습 모드
-      if (practiceMode === "knn" && currentMotion) {
-        const session = sessionRef.current;
-        const clf = classifiersRef.current[currentMotion];
-        if (session && clf && clf.numClasses >= 2) {
-          const features = extractFeatures(lms);
-          const { label, confidence } = clf.predict(features);
-          session.update(label, confidence, timestamp / 1000);
-
-          if (session.flashMsg && performance.now() - session.flashTime < 100) {
-            addFlash(session.flashMsg);
-            session.flashMsg = "";
+            if (session.flashMsg && performance.now() - session.flashTime < 100) {
+              addFlash(session.flashMsg);
+              session.flashMsg = "";
+            }
           }
-
-          // 규칙 기반 피드백도 병행
-          const fb = evaluatePose(currentMotion, lms, feedbackHistoryRef.current);
-          setFeedback(fb);
-
           forceUpdate(n => n + 1);
         }
       }
@@ -352,7 +365,7 @@ export default function App() {
       lastPoseRef.current = null;
       setFeedback(null);
     }
-  }, [practiceMode, currentMotion]);
+  }, []);
 
   // ═══════════════════════════════════════════════════════════
   // 스켈레톤 그리기
@@ -440,6 +453,26 @@ export default function App() {
 
     forceUpdate(n => n + 1);
   }
+
+  // ── 키보드 단축키 (SPACE: 녹화, ESC: 종료) ──
+  useEffect(() => {
+    function onKey(e) {
+      if (practiceMode === "record") {
+        if (e.code === "Space") {
+          e.preventDefault();
+          recordSample();
+        } else if (e.key === "Escape") {
+          exitPractice();
+        }
+      } else if (practiceMode === "instant" || practiceMode === "knn") {
+        if (e.key === "Escape") {
+          exitPractice();
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [practiceMode, currentMotion, selectedStep]);
 
   function startPractice(motionId, mode) {
     setCurrentMotion(motionId);
