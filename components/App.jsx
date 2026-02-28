@@ -88,13 +88,6 @@ export default function App() {
     }
     return "";
   });
-  const [cameraRotation, setCameraRotation] = useState(() => {
-    if (typeof window !== "undefined") {
-      return parseInt(localStorage.getItem("swim_camera_rotation") || "0");
-    }
-    return 0;
-  });
-
   // 학교/관리자 상태
   const [schools, setSchools] = useState([]);
   const [selectedSchoolId, setSelectedSchoolId] = useState(() => {
@@ -234,11 +227,15 @@ export default function App() {
   async function startCamera() {
     if (streamRef.current) return;
     try {
-      const constraints = {
-        video: selectedCameraId
-          ? { deviceId: { exact: selectedCameraId }, width: { ideal: 720 }, height: { ideal: 1280 } }
-          : { facingMode: "user", width: { ideal: 720 }, height: { ideal: 1280 } },
+      // 16:9 해상도 선호 (카메라가 지원하면 사용, 아니면 가능한 해상도 사용)
+      const videoConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        ...(selectedCameraId
+          ? { deviceId: { exact: selectedCameraId } }
+          : { facingMode: "user" }),
       };
+      const constraints = { video: videoConstraints };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       if (videoRef.current) {
@@ -361,11 +358,13 @@ export default function App() {
   // 스켈레톤 그리기
   // ═══════════════════════════════════════════════════════════
   function drawSkeleton(ctx, lms, cw, ch, vw, vh) {
-    const scale = Math.max(cw / vw, ch / vh);
+    // object-fit: contain과 동일하게 Math.min 사용
+    const scale = Math.min(cw / vw, ch / vh);
     const ox = (cw - vw * scale) / 2;
     const oy = (ch - vh * scale) / 2;
 
     function toScreen(lm) {
+      // 좌우반전 (거울 모드)
       return [(1 - lm.x) * vw * scale + ox, lm.y * vh * scale + oy];
     }
 
@@ -494,35 +493,37 @@ export default function App() {
 
         <div className="home-section">
           <div className="section-title">🎯 6대 생존수영 동작</div>
-          {Object.entries(MOTIONS).map(([id, m]) => {
-            const clf = classifiersRef.current[id];
-            const total = clf?.totalSamples || 0;
+          <div className="motion-cards-grid">
+            {Object.entries(MOTIONS).map(([id, m]) => {
+              const clf = classifiersRef.current[id];
+              const total = clf?.totalSamples || 0;
 
-            return (
-              <div
-                key={id}
-                className="motion-card"
-                onClick={() => {
-                  setActiveTab("practice");
-                  setPracticeMode("select");
-                  setCurrentMotion(parseInt(id));
-                  setHoldGoalInput(m.holdGoal || 30);
-                }}
-              >
-                <div className="card-icon">{m.icon}</div>
-                <div className="card-info">
-                  <h3>
-                    {m.name}
-                    <span className={`card-badge ${m.posture === "standing" ? "badge-standing" : "badge-seated"}`}>
-                      {m.posture === "standing" ? "서서" : "앉아서"}
-                    </span>
-                  </h3>
-                  <p>{m.desc}</p>
+              return (
+                <div
+                  key={id}
+                  className="motion-card"
+                  onClick={() => {
+                    setActiveTab("practice");
+                    setPracticeMode("select");
+                    setCurrentMotion(parseInt(id));
+                    setHoldGoalInput(m.holdGoal || 30);
+                  }}
+                >
+                  <div className="card-icon">{m.icon}</div>
+                  <div className="card-info">
+                    <h3>
+                      {m.name}
+                      <span className={`card-badge ${m.posture === "standing" ? "badge-standing" : "badge-seated"}`}>
+                        {m.posture === "standing" ? "서서" : "앉아서"}
+                      </span>
+                    </h3>
+                    <p>{m.desc}</p>
+                  </div>
+                  <div className="card-arrow">›</div>
                 </div>
-                <div className="card-arrow">›</div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -651,6 +652,8 @@ export default function App() {
     const m = MOTIONS[learnView];
     if (!m) return null;
 
+    const detail = m.detailGuide;
+
     return (
       <div className="main-content">
         <div className="practice-header">
@@ -664,24 +667,63 @@ export default function App() {
             <p className="detail-sub">{m.sub}</p>
           </div>
 
+          {/* 목적 설명 */}
           <div className="detail-section">
-            <h3>동작 설명</h3>
-            <p>{m.guide}</p>
+            <h3>왜 이 동작을 배우나요?</h3>
+            <p>{detail?.purpose || m.guide}</p>
           </div>
 
+          {/* 단계별 가이드 */}
+          {detail?.stepByStep && (
+            <div className="detail-section">
+              <h3>단계별 자세 가이드</h3>
+              <div className="step-guide">
+                {detail.stepByStep.map((item, i) => (
+                  <div key={i} className="step-guide-item">
+                    <div className="step-number">{i + 1}</div>
+                    <div className="step-content">
+                      <strong>{item.step}</strong>
+                      <p>{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 핵심 포인트 */}
+          {detail?.keyPoints && (
+            <div className="detail-section">
+              <h3>핵심 체크포인트</h3>
+              <ul className="checklist success">
+                {detail.keyPoints.map((point, i) => (
+                  <li key={i}>{point}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 흔한 실수 */}
+          {detail?.commonMistakes && (
+            <div className="detail-section">
+              <h3>이런 실수를 피하세요</h3>
+              <ul className="checklist warning">
+                {detail.commonMistakes.map((mistake, i) => (
+                  <li key={i}>{mistake}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 수행 정보 */}
           <div className="detail-section">
-            <h3>수행 방법</h3>
-            <ul className="checklist">
-              <li>{m.posture === "standing" ? "서서" : "앉아서"} 수행</li>
-              {m.holdMode ? (
-                <li>{m.holdGoal}초 유지하기</li>
-              ) : (
-                <li>{m.targetCycles}회 반복하기</li>
-              )}
-              {m.steps.slice(1).map((step, i) => (
-                <li key={i}>{step} 자세 취하기</li>
-              ))}
-            </ul>
+            <h3>수행 정보</h3>
+            <div className="info-chips">
+              <span className="info-chip">{m.posture === "standing" ? "🧍 서서" : "🪑 앉아서"}</span>
+              <span className="info-chip">
+                {m.holdMode ? `⏱️ ${m.holdGoal}초 유지` : `🔄 ${m.targetCycles}회 반복`}
+              </span>
+            </div>
           </div>
 
           <button
@@ -854,8 +896,8 @@ export default function App() {
 
     return (
       <div className="practice-view">
-        {/* 헤더 */}
-        <div className="practice-header">
+        {/* 헤더 (모바일용) */}
+        <div className="practice-header mobile-only">
           <button className="back-btn" onClick={exitPractice}>←</button>
           <h2>{m.icon} {m.name}</h2>
           <span className={`mode-badge ${isRecord ? "mode-record" : practiceMode === "knn" ? "mode-knn" : "mode-instant"}`}>
@@ -868,27 +910,21 @@ export default function App() {
           className={`camera-container ${session?.done ? "completed" : ""}`}
           ref={cameraContainerRef}
         >
+          {/* PC용 오버레이 헤더 */}
+          <div className="camera-header pc-only">
+            <button className="back-btn" onClick={exitPractice}>← 돌아가기</button>
+            <h2>{m.icon} {m.name}</h2>
+            <span className={`mode-badge ${isRecord ? "mode-record" : practiceMode === "knn" ? "mode-knn" : "mode-instant"}`}>
+              {isRecord ? "녹화" : practiceMode === "knn" ? "AI" : "즉시"}
+            </span>
+          </div>
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            style={{
-              transform: `translate(-50%, -50%) scaleX(-1) rotate(${cameraRotation}deg)`,
-              // 90도/270도 회전 시: 원본 height(=회전 후 가로)를 컨테이너 width에 맞춤
-              // 비디오의 height를 컨테이너 width로 설정 (회전 후 가로가 됨)
-              // min(100vw, 430px)는 앱 프레임 max-width와 동일
-              ...(cameraRotation === 90 || cameraRotation === 270
-                ? { width: "auto", height: "min(100vw, 430px)", maxWidth: "none", maxHeight: "none" }
-                : {}),
-            }}
           />
-          <canvas
-            ref={canvasRef}
-            style={{
-              transform: `rotate(${cameraRotation}deg)`,
-            }}
-          />
+          <canvas ref={canvasRef} />
 
           {/* FPS */}
           {cameraActive && <div className="fps-badge">FPS: {fps}</div>}
@@ -1342,36 +1378,6 @@ export default function App() {
           >
             🔄 카메라 목록 새로고침
           </button>
-
-          {/* 카메라 회전 */}
-          <div className="setting-item" style={{ marginTop: "16px" }}>
-            <span className="setting-icon">🔄</span>
-            <div className="setting-text">
-              <h4>카메라 회전</h4>
-              <p>카메라가 세로로 설치된 경우 회전</p>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-            {[0, 90, 180, 270].map((deg) => (
-              <button
-                key={deg}
-                className="setting-btn"
-                style={{
-                  flex: 1,
-                  background: cameraRotation === deg ? "var(--accent)" : "var(--card)",
-                  color: cameraRotation === deg ? "var(--bg)" : "var(--text)",
-                  marginBottom: 0,
-                }}
-                onClick={() => {
-                  setCameraRotation(deg);
-                  localStorage.setItem("swim_camera_rotation", deg.toString());
-                  showToast(`카메라 ${deg}° 회전`);
-                }}
-              >
-                {deg}°
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* 데이터 관리 */}
@@ -1576,35 +1582,35 @@ export default function App() {
             className={`tab-item ${activeTab === "home" ? "active" : ""}`}
             onClick={() => setActiveTab("home")}
           >
-            <span className="tab-icon">🏠</span>
+            <img src="/icons/home.png" alt="홈" className="tab-icon" />
             <span className="tab-label">홈</span>
           </button>
           <button
             className={`tab-item ${activeTab === "learn" ? "active" : ""}`}
             onClick={() => { setActiveTab("learn"); setLearnView(null); }}
           >
-            <span className="tab-icon">📖</span>
+            <img src="/icons/learn.png" alt="학습" className="tab-icon" />
             <span className="tab-label">학습</span>
           </button>
           <button
             className={`tab-item ${activeTab === "practice" ? "active" : ""}`}
             onClick={() => { setActiveTab("practice"); setPracticeMode(null); setCurrentMotion(null); }}
           >
-            <span className="tab-icon">🏊</span>
+            <img src="/icons/practice.png" alt="연습" className="tab-icon" />
             <span className="tab-label">연습</span>
           </button>
           <button
             className={`tab-item ${activeTab === "history" ? "active" : ""}`}
             onClick={() => setActiveTab("history")}
           >
-            <span className="tab-icon">📊</span>
+            <img src="/icons/history.png" alt="기록" className="tab-icon" />
             <span className="tab-label">기록</span>
           </button>
           <button
             className={`tab-item ${activeTab === "settings" ? "active" : ""}`}
             onClick={() => setActiveTab("settings")}
           >
-            <span className="tab-icon">⚙️</span>
+            <img src="/icons/setting.png" alt="설정" className="tab-icon" />
             <span className="tab-label">설정</span>
           </button>
         </nav>

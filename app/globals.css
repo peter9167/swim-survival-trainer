@@ -26,7 +26,8 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-html, body {
+html,
+body {
   font-family: "Noto Sans KR", -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
@@ -40,29 +41,16 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   모바일 앱 프레임 (9:16 세로 고정)
+   앱 프레임 - 유동적 반응형 레이아웃
    ═══════════════════════════════════════════════════════════ */
 .app-frame {
   width: 100%;
-  max-width: 430px;
   height: 100dvh;
-  margin: 0 auto;
   background: var(--bg);
   display: flex;
   flex-direction: column;
   position: relative;
   overflow: hidden;
-}
-
-/* 데스크탑에서 양옆 어두운 배경 */
-@media (min-width: 431px) {
-  body {
-    background: #000;
-  }
-  .app-frame {
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -88,11 +76,9 @@ html, body {
   gap: 2px;
   background: none;
   border: none;
-  color: var(--text3);
   font-size: 10px;
   font-family: inherit;
   cursor: pointer;
-  transition: color 0.2s;
   padding: 6px 0;
 }
 
@@ -100,17 +86,25 @@ html, body {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.tab-item.active {
-  color: var(--accent);
+.tab-item .tab-label {
+  color: rgba(255, 255, 255, 0.8);
+  transition: color 0.2s;
+}
+
+.tab-item.active .tab-label {
+  color: var(--text);
 }
 
 .tab-item .tab-icon {
-  font-size: 22px;
-  line-height: 1;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: invert(1) opacity(0.8);
+  transition: filter 0.2s;
 }
 
-.tab-item .tab-label {
-  font-weight: 500;
+.tab-item.active .tab-icon {
+  filter: invert(1) opacity(1);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -132,11 +126,16 @@ html, body {
   border-radius: 2px;
 }
 
+/* 콘텐츠 내부 패딩 - 뷰포트 크기에 따라 유동적 */
+.main-content {
+  padding: clamp(12px, 3vw, 40px);
+}
+
 /* ═══════════════════════════════════════════════════════════
    공통 페이지 헤더
    ═══════════════════════════════════════════════════════════ */
 .page-header {
-  padding: 16px 20px;
+  padding: clamp(12px, 2vw, 20px) clamp(16px, 3vw, 24px);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -145,13 +144,13 @@ html, body {
 }
 
 .page-header h1 {
-  font-size: 20px;
+  font-size: clamp(18px, 3vw, 24px);
   font-weight: 700;
   color: var(--text);
 }
 
 .page-header p {
-  font-size: 13px;
+  font-size: clamp(12px, 1.8vw, 15px);
   color: var(--text2);
   margin-top: 2px;
 }
@@ -160,51 +159,58 @@ html, body {
    홈 탭
    ═══════════════════════════════════════════════════════════ */
 .home-hero {
-  padding: 24px 20px;
+  padding: clamp(16px, 4vw, 32px) clamp(16px, 3vw, 24px);
   text-align: center;
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg) 100%);
 }
 
 .home-hero .hero-icon {
-  font-size: 56px;
+  font-size: clamp(40px, 8vw, 64px);
   margin-bottom: 8px;
 }
 
 .home-hero h1 {
-  font-size: 24px;
+  font-size: clamp(20px, 4vw, 28px);
   font-weight: 800;
   color: var(--accent);
   margin-bottom: 4px;
 }
 
 .home-hero p {
-  font-size: 14px;
+  font-size: clamp(13px, 2vw, 16px);
   color: var(--text2);
 }
 
 .home-section {
-  padding: 16px 20px;
+  padding: clamp(12px, 2vw, 20px) 0;
 }
 
 .section-title {
-  font-size: 14px;
+  font-size: clamp(14px, 2vw, 18px);
   font-weight: 700;
   color: var(--text);
-  margin-bottom: 12px;
+  margin-bottom: clamp(12px, 2vw, 20px);
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 동작 카드 그리드 - 자동 반응형 */
+.motion-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: clamp(10px, 2vw, 16px);
 }
 
 .motion-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 10px;
+  padding: clamp(12px, 2vw, 18px) clamp(14px, 2vw, 20px);
+  margin-bottom: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: clamp(10px, 2vw, 16px);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -215,8 +221,8 @@ html, body {
 }
 
 .motion-card .card-icon {
-  font-size: 32px;
-  min-width: 40px;
+  font-size: clamp(28px, 4vw, 36px);
+  min-width: clamp(36px, 5vw, 48px);
   text-align: center;
 }
 
@@ -226,7 +232,7 @@ html, body {
 }
 
 .motion-card .card-info h3 {
-  font-size: 15px;
+  font-size: clamp(14px, 2vw, 17px);
   font-weight: 600;
   margin-bottom: 2px;
   display: flex;
@@ -235,7 +241,7 @@ html, body {
 }
 
 .motion-card .card-info p {
-  font-size: 12px;
+  font-size: clamp(11px, 1.5vw, 14px);
   color: var(--text2);
   white-space: nowrap;
   overflow: hidden;
@@ -323,7 +329,9 @@ html, body {
 
 /* 학습 상세 페이지 */
 .learn-detail {
-  padding: 20px;
+  padding: clamp(16px, 3vw, 28px);
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .learn-detail .detail-header {
@@ -332,18 +340,18 @@ html, body {
 }
 
 .learn-detail .detail-icon {
-  font-size: 48px;
+  font-size: clamp(40px, 6vw, 56px);
   margin-bottom: 8px;
 }
 
 .learn-detail h2 {
-  font-size: 22px;
+  font-size: clamp(20px, 3vw, 26px);
   font-weight: 700;
   margin-bottom: 4px;
 }
 
 .learn-detail .detail-sub {
-  font-size: 14px;
+  font-size: clamp(13px, 2vw, 16px);
   color: var(--text2);
 }
 
@@ -417,12 +425,82 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   연습 탭 - 카메라 & 피드백
+   연습 탭 - 카메라 & 피드백 (유동적 반응형)
    ═══════════════════════════════════════════════════════════ */
 .practice-view {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 화면이 충분히 넓을 때 (aspect ratio 활용) - 가로 레이아웃 */
+@media (min-aspect-ratio: 4/3) and (min-width: 600px) {
+  .practice-view {
+    flex-direction: row;
+  }
+
+  .practice-view>.practice-header.mobile-only {
+    display: none;
+  }
+
+  .practice-view>.camera-container {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+  }
+
+  /* 사이드바 영역 - 패널과 컨트롤을 세로로 배치 */
+  .practice-view>.record-panel,
+  .practice-view>.feedback-panel {
+    width: clamp(280px, 25vw, 400px);
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    border-top: none;
+    overflow-y: auto;
+    max-height: calc(100% - 70px);
+    /* 컨트롤 높이 제외 */
+  }
+
+  .practice-view>.practice-controls {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: clamp(280px, 25vw, 400px);
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* 아주 넓은 화면에서 컨트롤 플로팅 */
+@media (min-aspect-ratio: 16/9) and (min-width: 900px) {
+
+  .practice-view>.record-panel,
+  .practice-view>.feedback-panel {
+    max-height: 100%;
+  }
+
+  .practice-view>.practice-controls {
+    position: fixed;
+    right: auto;
+    bottom: clamp(16px, 3vh, 30px);
+    left: 50%;
+    transform: translateX(-50%);
+    flex-direction: row;
+    gap: 12px;
+    background: var(--panel);
+    padding: 12px clamp(16px, 2vw, 24px);
+    border-radius: 30px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    width: auto;
+  }
+
+  .practice-view>.practice-controls .ctrl-btn {
+    min-width: clamp(100px, 10vw, 140px);
+  }
 }
 
 .practice-header {
@@ -490,7 +568,7 @@ html, body {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  /* 추가 transform(회전)은 App.jsx에서 동적으로 설정 */
+  transform: translate(-50%, -50%) scaleX(-1);
 }
 
 .camera-container canvas {
@@ -543,7 +621,7 @@ html, body {
 /* 피드백 체크리스트 */
 .feedback-panel {
   background: var(--panel);
-  padding: 12px 16px;
+  padding: clamp(10px, 2vw, 16px) clamp(12px, 2vw, 20px);
   border-top: 1px solid var(--border);
   max-height: 40%;
   overflow-y: auto;
@@ -655,8 +733,8 @@ html, body {
 /* 연습 컨트롤 */
 .practice-controls {
   display: flex;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: clamp(6px, 1vw, 12px);
+  padding: clamp(10px, 2vw, 16px);
   background: var(--panel);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -664,11 +742,11 @@ html, body {
 
 .practice-controls .ctrl-btn {
   flex: 1;
-  padding: 12px;
+  padding: clamp(10px, 1.5vw, 14px);
   border: none;
   border-radius: 10px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: clamp(13px, 1.8vw, 16px);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
@@ -697,26 +775,28 @@ html, body {
 
 /* 동작 선택 화면 */
 .motion-select {
-  padding: 20px;
+  padding: clamp(16px, 3vw, 28px);
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .motion-select h2 {
-  font-size: 18px;
+  font-size: clamp(16px, 2.5vw, 22px);
   font-weight: 700;
-  margin-bottom: 16px;
+  margin-bottom: clamp(12px, 2vw, 20px);
 }
 
 .motion-select-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 12px;
+  padding: clamp(12px, 2vw, 20px);
+  margin-bottom: clamp(10px, 1.5vw, 16px);
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: clamp(10px, 2vw, 16px);
 }
 
 .motion-select-card:active {
@@ -725,17 +805,17 @@ html, body {
 }
 
 .motion-select-card .sel-icon {
-  font-size: 36px;
+  font-size: clamp(30px, 5vw, 42px);
 }
 
 .motion-select-card .sel-info h3 {
-  font-size: 16px;
+  font-size: clamp(14px, 2vw, 18px);
   font-weight: 600;
   margin-bottom: 4px;
 }
 
 .motion-select-card .sel-info p {
-  font-size: 12px;
+  font-size: clamp(11px, 1.5vw, 14px);
   color: var(--text2);
 }
 
@@ -816,6 +896,7 @@ html, body {
     opacity: 0;
     scale: 0.8;
   }
+
   to {
     opacity: 1;
     scale: 1;
@@ -834,28 +915,30 @@ html, body {
    ═══════════════════════════════════════════════════════════ */
 .history-empty {
   text-align: center;
-  padding: 60px 20px;
+  padding: clamp(40px, 8vw, 80px) clamp(16px, 3vw, 24px);
   color: var(--text3);
 }
 
 .history-empty .empty-icon {
-  font-size: 48px;
+  font-size: clamp(40px, 6vw, 56px);
   margin-bottom: 12px;
 }
 
 .history-empty p {
-  font-size: 14px;
+  font-size: clamp(13px, 2vw, 16px);
 }
 
 .history-list {
-  padding: 16px 20px;
+  padding: clamp(12px, 2vw, 20px);
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .history-item {
   background: var(--card);
   border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 10px;
+  padding: clamp(12px, 2vw, 18px);
+  margin-bottom: clamp(8px, 1.5vw, 14px);
   border: 1px solid var(--border);
 }
 
@@ -900,27 +983,29 @@ html, body {
 /* 통계 카드 */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  padding: 16px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: clamp(10px, 2vw, 16px);
+  padding: clamp(12px, 2vw, 20px);
+  max-width: 600px;
+  margin: 0 auto;
 }
 
 .stat-card {
   background: var(--card);
   border-radius: 12px;
-  padding: 16px;
+  padding: clamp(12px, 2vw, 20px);
   text-align: center;
   border: 1px solid var(--border);
 }
 
 .stat-card .stat-value {
-  font-size: 28px;
+  font-size: clamp(24px, 4vw, 36px);
   font-weight: 800;
   color: var(--accent);
 }
 
 .stat-card .stat-label {
-  font-size: 12px;
+  font-size: clamp(11px, 1.5vw, 14px);
   color: var(--text2);
   margin-top: 4px;
 }
@@ -929,17 +1014,19 @@ html, body {
    설정 탭
    ═══════════════════════════════════════════════════════════ */
 .settings-section {
-  padding: 16px 20px;
+  padding: clamp(12px, 2vw, 20px);
   border-bottom: 1px solid var(--border);
+  max-width: 600px;
+  margin: 0 auto;
 }
 
 .settings-section h3 {
-  font-size: 13px;
+  font-size: clamp(12px, 1.8vw, 14px);
   font-weight: 700;
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-bottom: 12px;
+  margin-bottom: clamp(10px, 1.5vw, 14px);
 }
 
 .setting-item {
@@ -1122,7 +1209,7 @@ html, body {
    녹화 모드 UI
    ═══════════════════════════════════════════════════════════ */
 .record-panel {
-  padding: 12px 16px;
+  padding: clamp(10px, 2vw, 16px);
   background: var(--panel);
   border-top: 1px solid var(--border);
   max-height: 45%;
@@ -1288,6 +1375,7 @@ html, body {
     opacity: 0;
     transform: translateX(-50%) translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
@@ -1302,25 +1390,120 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   반응형 유틸리티 (aspect ratio + width 기반)
+   ═══════════════════════════════════════════════════════════ */
+.mobile-only {
+  display: flex;
+}
+
+.pc-only {
+  display: none;
+}
+
+/* 화면이 가로로 넓고 최소 너비 이상일 때 */
+@media (min-aspect-ratio: 4/3) and (min-width: 600px) {
+  .mobile-only {
+    display: none !important;
+  }
+
+  .pc-only {
+    display: flex !important;
+  }
+}
+
+/* 카메라 영역 내 PC 헤더 */
+.camera-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 16px 20px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 10;
+}
+
+.camera-header .back-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.camera-header .back-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.camera-header h2 {
+  flex: 1;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.camera-header .mode-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 20px;
+}
+
+/* ═══════════════════════════════════════════════════════════
    유틸리티
    ═══════════════════════════════════════════════════════════ */
 .hidden {
   display: none !important;
 }
 
-.text-accent { color: var(--accent); }
-.text-success { color: var(--success); }
-.text-warning { color: var(--warning); }
-.text-danger { color: var(--danger); }
-.text-muted { color: var(--text2); }
+.text-accent {
+  color: var(--accent);
+}
 
-.font-bold { font-weight: 700; }
-.font-semibold { font-weight: 600; }
+.text-success {
+  color: var(--success);
+}
 
-.mt-2 { margin-top: 8px; }
-.mt-4 { margin-top: 16px; }
-.mb-2 { margin-bottom: 8px; }
-.mb-4 { margin-bottom: 16px; }
+.text-warning {
+  color: var(--warning);
+}
+
+.text-danger {
+  color: var(--danger);
+}
+
+.text-muted {
+  color: var(--text2);
+}
+
+.font-bold {
+  font-weight: 700;
+}
+
+.font-semibold {
+  font-weight: 600;
+}
+
+.mt-2 {
+  margin-top: 8px;
+}
+
+.mt-4 {
+  margin-top: 16px;
+}
+
+.mb-2 {
+  margin-bottom: 8px;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
 
 /* 로딩 스피너 */
 .loading {
@@ -1350,4 +1533,89 @@ html, body {
 .loading p {
   font-size: 14px;
   color: var(--text2);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   학습 상세 - 단계별 가이드
+   ═══════════════════════════════════════════════════════════ */
+.step-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step-guide-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: var(--card);
+  border-radius: 10px;
+  border-left: 3px solid var(--accent);
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.step-content {
+  flex: 1;
+}
+
+.step-content strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.step-content p {
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* 체크리스트 변형 */
+.checklist.success li::before {
+  content: "✅ ";
+}
+
+.checklist.warning li::before {
+  content: "⚠️ ";
+}
+
+.checklist.success li,
+.checklist.warning li {
+  list-style: none;
+  margin-left: -20px;
+  padding-left: 0;
+}
+
+/* 정보 칩 */
+.info-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.info-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--text);
 }
