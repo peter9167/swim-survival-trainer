@@ -561,6 +561,10 @@ export default function App() {
   // ── 키보드 단축키 (SPACE: 녹화, ESC: 종료) ──
   useEffect(() => {
     function onKey(e) {
+      if (e.key === "Escape" && previewImage) {
+        setPreviewImage(null);
+        return;
+      }
       if (practiceMode === "record") {
         if (e.code === "Space") {
           e.preventDefault();
@@ -576,7 +580,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [practiceMode, currentMotion, selectedStep]);
+  }, [practiceMode, currentMotion, selectedStep, previewImage]);
 
   function startPractice(motionId, mode) {
     setCurrentMotion(motionId);
