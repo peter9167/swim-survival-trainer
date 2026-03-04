@@ -6,10 +6,14 @@ import { extractFeatures } from "@/lib/features";
 import { KNNClassifier } from "@/lib/knn";
 import { PracticeSession } from "@/lib/session";
 import { evaluatePose, FeedbackHistory } from "@/lib/feedback";
+import { StageSkeleton } from "@/lib/skeletonIcons";
 import {
   getSchools,
   createSchool,
   verifyAdminPassword,
+  saveTrainingData,
+  deleteTrainingData,
+  deleteAllTrainingDataBySchool,
   DEFAULT_SCHOOL_ID,
 } from "@/lib/supabase";
 
@@ -78,6 +82,7 @@ export default function App() {
   const [cameraActive, setCameraActive] = useState(false);
   const [fps, setFps] = useState(0);
   const [modelReady, setModelReady] = useState(false);
+  const [practiceComplete, setPracticeComplete] = useState(null); // 완료 결과 {motionId, holdSec, cycles, score}
   const [, forceUpdate] = useState(0);
 
   // 카메라 선택
@@ -98,12 +103,22 @@ export default function App() {
   });
   const [isAdmin, setIsAdmin] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadingMsg, setLoadingMsg] = useState("");
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
 
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
 
+  // 모달
+  const [modal, setModal] = useState(null);
+  const modalResolveRef = useRef(null);
+
   // 토스트
   const [toast, setToast] = useState(null);
+
+  // 자세 미리보기
+  const [previewImage, setPreviewImage] = useState(null);
 
   // refs
   const videoRef = useRef(null);
@@ -122,6 +137,10 @@ export default function App() {
   const streamRef = useRef(null);
   const practiceModeRef = useRef(practiceMode);
   const currentMotionRef = useRef(currentMotion);
+  const graceStartRef = useRef(null); // 유예 시간 시작 시점
+  const feedbackRef = useRef(null); // 피드백 ref (매 프레임 업데이트)
+  const lastUIUpdateRef = useRef(0); // UI 업데이트 쓰로틀 타이머
+  const UI_THROTTLE_MS = 150; // UI 업데이트 간격 (ms)
 
   // refs를 최신 상태로 동기화 (mainLoop 스테일 클로저 방지)
   practiceModeRef.current = practiceMode;
@@ -145,33 +164,21 @@ export default function App() {
         console.error("Failed to load schools:", err);
       }
 
-      // Supabase에서 학습 데이터 로드
+      // Supabase에서 학습 데이터 로드 (동작별 + step name 라벨)
       const savedSchoolId = localStorage.getItem("swim_school_id") || "";
       try {
         for (let i = 1; i <= 6; i++) {
-          await classifiersRef.current[i].loadFromSupabase(savedSchoolId || null);
+          await classifiersRef.current[i].loadFromSupabase(
+            i.toString(), MOTIONS[i].steps, savedSchoolId || null
+          );
         }
         console.log("Training data loaded from Supabase");
       } catch (err) {
         console.error("Failed to load training data:", err);
       }
 
-      // localStorage 데이터 병합 (로컬 녹화 데이터 보존)
-      for (let i = 1; i <= 6; i++) {
-        const saved = localStorage.getItem(`swim_knn_${i}`);
-        if (saved) {
-          try {
-            const localSamples = JSON.parse(saved);
-            for (const [label, features] of Object.entries(localSamples)) {
-              for (const feat of features) {
-                classifiersRef.current[i].addSample(label, feat);
-              }
-            }
-          } catch (e) {
-            console.error(`Failed to merge local data for motion ${i}:`, e);
-          }
-        }
-      }
+      // Supabase 데이터가 없는 동작만 localStorage에서 병합
+      mergeLocalStorage();
       setDataLoading(false);
 
       // MediaPipe 로드
@@ -331,19 +338,62 @@ export default function App() {
       // 즉시 연습 모드 또는 KNN 모드: 규칙 기반 피드백은 항상 실행
       if ((pm === "instant" || pm === "knn") && cm) {
         const fb = evaluatePose(cm, lms, feedbackHistoryRef.current);
-        setFeedback(fb);
+        feedbackRef.current = fb;
 
         const session = sessionRef.current;
+        let needsUIUpdate = false;
 
         if (pm === "instant") {
-          // 즉시 모드: 모든 체크포인트 통과 시 세션 업데이트
-          if (session && fb.allPassed) {
-            session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
+          const GRACE_MS = 500; // 0.5초 유예
+
+          if (session && session.motion.holdStages && !session.guideStageDone) {
+            // ── 가이드 단계 진행 중 ──
+            const stageIdx = session.guideStageIdx;
+            const checksUpToCurrent = fb.checks.slice(0, stageIdx + 1);
+            const allUpToCurrent = checksUpToCurrent.every(c => c.passed);
+
+            session.updateGuideStageConfirm(allUpToCurrent, timestamp / 1000);
+
+            if (allUpToCurrent && session.guideStageConfirmSec >= session.currentGuideStage.confirmSec) {
+              session.advanceGuideStage();
+              if (session.flashMsg && performance.now() - session.flashTime < 100) {
+                addFlash(session.flashMsg);
+                session.flashMsg = "";
+              }
+              // guideStageDone이 되면 graceStart 리셋
+              if (session.guideStageDone) {
+                graceStartRef.current = null;
+              }
+            }
+            needsUIUpdate = true;
+          } else if (session && fb.allPassed) {
+            // ── 전체 체크 통과 (가이드 완료 후 최종 유지 또는 비가이드) ──
+            graceStartRef.current = null;
+            if (session.motion.instantGoal) {
+              // 시퀀스 동작 즉시 모드: 시간 기반 추적
+              session.updateInstantHold(timestamp / 1000);
+            } else {
+              session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
+            }
             if (session.flashMsg && performance.now() - session.flashTime < 100) {
               addFlash(session.flashMsg);
               session.flashMsg = "";
             }
-            forceUpdate(n => n + 1);
+            needsUIUpdate = true;
+          } else if (session) {
+            // ── 체크 미통과 → 유예 시간 처리 ──
+            const now = performance.now();
+            if (!graceStartRef.current) {
+              graceStartRef.current = now;
+            }
+            if (now - graceStartRef.current > GRACE_MS) {
+              // 최종 유지 단계에서만 holdSec 리셋
+              if (session.guideStageDone || !session.motion.holdStages) {
+                session.holdStart = null;
+                session.holdSec = 0;
+              }
+              needsUIUpdate = true;
+            }
           }
         } else if (pm === "knn") {
           // KNN 모드: AI 분류 + 규칙 피드백 병행
@@ -358,12 +408,50 @@ export default function App() {
               session.flashMsg = "";
             }
           }
+          needsUIUpdate = true;
+        }
+
+        // 목표 달성 감지 → 카메라 정지 + 완료 화면
+        if (session && session.done) {
+          const m = MOTIONS[cm];
+          saveHistory(session);
+          // RAF 중단 (카메라 인식 정지)
+          if (rafRef.current) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+          }
+          // 진동 피드백 (모바일)
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200]);
+          setPracticeComplete({
+            motionId: cm,
+            motionName: m.name,
+            motionIcon: m.icon,
+            holdSec: session.holdSec,
+            cycles: session.cyclesDone,
+            targetCycles: m.targetCycles,
+            holdGoal: session.customHoldGoal,
+            score: session.score,
+            holdMode: m.holdMode || !!m.instantGoal,
+          });
+          setFeedback(feedbackRef.current);
+          forceUpdate(n => n + 1);
+          return; // 루프 종료
+        }
+
+        // UI 업데이트 쓰로틀: 150ms 간격으로만 React 리렌더링
+        const now = performance.now();
+        if (needsUIUpdate && now - lastUIUpdateRef.current >= UI_THROTTLE_MS) {
+          lastUIUpdateRef.current = now;
+          setFeedback(feedbackRef.current);
           forceUpdate(n => n + 1);
         }
       }
     } else {
       lastPoseRef.current = null;
-      setFeedback(null);
+      if (feedbackRef.current !== null) {
+        feedbackRef.current = null;
+        setFeedback(null);
+      }
     }
   }, []);
 
@@ -412,6 +500,21 @@ export default function App() {
     setTimeout(() => setToast(null), 2500);
   }
 
+  // ── 커스텀 모달 ──
+  // type: "confirm" | "prompt" | "prompt2" (입력 2개)
+  function showModal({ type = "confirm", title, message, placeholder, placeholder2, danger }) {
+    return new Promise((resolve) => {
+      modalResolveRef.current = resolve;
+      setModal({ type, title, message, placeholder, placeholder2, danger, inputVal: "", inputVal2: "" });
+    });
+  }
+
+  function closeModal(result) {
+    modalResolveRef.current?.(result);
+    modalResolveRef.current = null;
+    setModal(null);
+  }
+
   function addFlash(msg) {
     const id = Date.now();
     flashRef.current = [...flashRef.current, { id, msg }];
@@ -434,11 +537,12 @@ export default function App() {
       const success = await clf.addSampleToSupabase(
         currentMotion.toString(),
         selectedStep,
+        stepName,
         features,
         selectedSchoolId
       );
       if (success) {
-        const cnt = clf.getMotionSampleCounts(currentMotion.toString())[selectedStep] || 0;
+        const cnt = clf.getSampleCounts()[stepName] || 0;
         addFlash(`${stepName} 녹화! (${cnt}개)`);
       } else {
         showToast("저장 실패", "error");
@@ -490,6 +594,8 @@ export default function App() {
     setCurrentMotion(null);
     sessionRef.current = null;
     setFeedback(null);
+    feedbackRef.current = null;
+    setPracticeComplete(null);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -525,9 +631,9 @@ export default function App() {
         </div>
 
         <div className="home-section">
-          <div className="section-title">🎯 6대 생존수영 동작</div>
+          <div className="section-title">🎯 생존수영 동작</div>
           <div className="motion-cards-grid">
-            {Object.entries(MOTIONS).map(([id, m]) => {
+            {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
               const clf = classifiersRef.current[id];
               const total = clf?.totalSamples || 0;
 
@@ -591,7 +697,7 @@ export default function App() {
         {/* 생존뜨기 */}
         <div className="learn-category">
           <div className="category-header">생존뜨기</div>
-          {[1, 2, 6].map(id => {
+          {[1, 2, 6].filter(id => !MOTIONS[id].hidden).map(id => {
             const m = MOTIONS[id];
             return (
               <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
@@ -700,6 +806,13 @@ export default function App() {
             <p className="detail-sub">{m.sub}</p>
           </div>
 
+          {/* 동작 이미지 */}
+          {m.learnImage && (
+            <div className="detail-section learn-image-section">
+              <img src={m.learnImage} alt={m.name} className="learn-image" />
+            </div>
+          )}
+
           {/* 목적 설명 */}
           <div className="detail-section">
             <h3>왜 이 동작을 배우나요?</h3>
@@ -804,7 +917,7 @@ export default function App() {
 
         <div className="motion-select">
           <h2>동작 선택</h2>
-          {Object.entries(MOTIONS).map(([id, m]) => {
+          {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
             const clf = classifiersRef.current[id];
             const trained = (clf?.numClasses || 0) >= 2;
 
@@ -940,7 +1053,7 @@ export default function App() {
 
         {/* 카메라 영역 */}
         <div
-          className={`camera-container ${session?.done ? "completed" : ""}`}
+          className="camera-container"
           ref={cameraContainerRef}
         >
           {/* PC용 오버레이 헤더 */}
@@ -951,26 +1064,81 @@ export default function App() {
               {isRecord ? "녹화" : practiceMode === "knn" ? "AI" : "즉시"}
             </span>
           </div>
+          {/* eslint-disable-next-line react/no-unknown-property */}
           <video
             ref={videoRef}
             autoPlay
             playsInline
+            webkit-playsinline=""
             muted
+            disablePictureInPicture
+            style={{ WebkitMediaPlaybackRequiresUserAction: false }}
           />
           <canvas ref={canvasRef} />
 
           {/* FPS */}
           {cameraActive && <div className="fps-badge">FPS: {fps}</div>}
 
-          {/* 유지시간 타이머 (holdMode 연습 시) */}
-          {!isRecord && m.holdMode && session && session.holdSec > 0 && (
+          {/* 자세 미리보기 버튼 */}
+          {m.learnImage && !practiceComplete && (
+            <button
+              className="camera-preview-btn"
+              onClick={() => setPreviewImage(m.learnImage)}
+            >
+              자세 미리보기
+            </button>
+          )}
+
+          {/* 가이드 단계 스켈레톤 오버레이 */}
+          {!isRecord && m.holdStages && session && !session.guideStageDone && (
+            <div className="skeleton-guide-overlay">
+              <StageSkeleton
+                motionId={parseInt(session.mid)}
+                stageIndex={session.guideStageIdx}
+                color="rgba(255,255,255,0.45)"
+                highlightColor="#fff"
+                size={160}
+              />
+              <span className="skeleton-guide-label">{session.currentGuideStage?.checkName}</span>
+            </div>
+          )}
+
+          {/* 단계별 확인 타이머 오버레이 (가이드 진행 중) */}
+          {!isRecord && m.holdStages && session && !session.guideStageDone && session.guideStageConfirmSec > 0 && (
+            <div className="stage-confirm-overlay">
+              <div className="stage-confirm-circle">
+                <svg viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="46" stroke="var(--border)" />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="46"
+                    stroke="var(--success)"
+                    strokeDasharray={2 * Math.PI * 46}
+                    strokeDashoffset={
+                      2 * Math.PI * 46 * (1 - Math.min(
+                        session.guideStageConfirmSec / session.currentGuideStage.confirmSec,
+                        1
+                      ))
+                    }
+                  />
+                </svg>
+                <span className="stage-confirm-text">{session.guideStageConfirmSec.toFixed(1)}</span>
+              </div>
+              <span className="stage-confirm-label">{session.currentGuideStage?.checkName}</span>
+            </div>
+          )}
+
+          {/* 유지시간 타이머 (최종 유지 단계) */}
+          {!isRecord && (m.holdMode || m.instantGoal) && session && session.holdSec > 0
+            && (!m.holdStages || session.guideStageDone) && (
             <div className="hold-timer">
               <div className="hold-circle">
-                <svg viewBox="0 0 106 106">
-                  <circle cx="53" cy="53" r="46" stroke="var(--border)" />
+                <svg viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="46" stroke="var(--border)" />
                   <circle
-                    cx="53"
-                    cy="53"
+                    cx="50"
+                    cy="50"
                     r="46"
                     stroke="var(--accent)"
                     strokeDasharray={2 * Math.PI * 46}
@@ -989,43 +1157,71 @@ export default function App() {
           {flashRef.current.map((f) => (
             <div key={f.id} className="flash-msg">{f.msg}</div>
           ))}
+
+          {/* 완료 오버레이 */}
+          {practiceComplete && (
+            <div className="complete-overlay">
+              <div className="complete-icon">{practiceComplete.motionIcon}</div>
+              <div className="complete-title">목표 달성!</div>
+              <div className="complete-motion">{practiceComplete.motionName}</div>
+              <div className="complete-stats">
+                {practiceComplete.holdMode ? (
+                  <div className="complete-stat">
+                    <span className="stat-value">{practiceComplete.holdSec.toFixed(1)}</span>
+                    <span className="stat-label">초 유지</span>
+                  </div>
+                ) : (
+                  <div className="complete-stat">
+                    <span className="stat-value">{practiceComplete.cycles}</span>
+                    <span className="stat-label">회 완료</span>
+                  </div>
+                )}
+                <div className="complete-stat">
+                  <span className="stat-value">{practiceComplete.score}</span>
+                  <span className="stat-label">점</span>
+                </div>
+              </div>
+              <div className="complete-buttons">
+                <button className="complete-btn retry" onClick={() => {
+                  setPracticeComplete(null);
+                  session?.reset();
+                  graceStartRef.current = null;
+                  feedbackHistoryRef.current.clear();
+                  feedbackRef.current = null;
+                  setFeedback(null);
+                  // RAF 재시작
+                  if (!rafRef.current) {
+                    rafRef.current = requestAnimationFrame(mainLoop);
+                  }
+                  forceUpdate(n => n + 1);
+                }}>
+                  다시 하기
+                </button>
+                <button className="complete-btn exit" onClick={exitPractice}>
+                  다른 동작
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 녹화 패널 */}
         {isRecord && renderRecordPanel()}
 
         {/* 피드백 패널 */}
-        {!isRecord && feedback && renderFeedbackPanel()}
+        {!isRecord && !practiceComplete && cameraActive && renderFeedbackPanel()}
 
-        {/* 컨트롤 */}
-        <div className="practice-controls">
-          {isRecord ? (
-            <>
-              <button className="ctrl-btn primary" onClick={recordSample}>
-                📷 녹화 (SPACE)
-              </button>
-              <button className="ctrl-btn secondary" onClick={exitPractice}>
-                완료
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="ctrl-btn secondary"
-                onClick={() => {
-                  session?.reset();
-                  feedbackHistoryRef.current.clear();
-                  forceUpdate(n => n + 1);
-                }}
-              >
-                ↺ 리셋
-              </button>
-              <button className="ctrl-btn secondary" onClick={exitPractice}>
-                종료
-              </button>
-            </>
-          )}
-        </div>
+        {/* 컨트롤 (녹화 모드만) */}
+        {!practiceComplete && isRecord && (
+          <div className="practice-controls">
+            <button className="ctrl-btn primary" onClick={recordSample}>
+              📷 녹화 (SPACE)
+            </button>
+            <button className="ctrl-btn secondary" onClick={exitPractice}>
+              완료
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -1081,10 +1277,28 @@ export default function App() {
 
   // 피드백 패널
   function renderFeedbackPanel() {
-    if (!feedback) return null;
+    const fb = feedback || feedbackRef.current;
+    if (!fb) return (
+      <div className="feedback-panel">
+        <div className="feedback-score">
+          <div className="score-circle">
+            <svg viewBox="0 0 56 56">
+              <circle cx="28" cy="28" r={24} stroke="var(--border)" />
+            </svg>
+            0%
+          </div>
+          <div className="feedback-message">
+            <div className="main-msg">카메라에 자세를 보여주세요</div>
+            <div className="sub-msg">포즈 감지 대기 중...</div>
+          </div>
+        </div>
+      </div>
+    );
 
-    const { checks, overallScore, summaryMessage, allPassed } = feedback;
-    const radius = 25;
+    const { checks, overallScore, summaryMessage, allPassed } = fb;
+    const session = sessionRef.current;
+    const isGuidedHold = session?.motion?.holdStages && !session?.guideStageDone;
+    const radius = 24;
     const circumference = 2 * Math.PI * radius;
     const offset = circumference * (1 - overallScore / 100);
 
@@ -1092,11 +1306,11 @@ export default function App() {
       <div className="feedback-panel">
         <div className="feedback-score">
           <div className={`score-circle ${allPassed ? "perfect" : ""}`}>
-            <svg viewBox="0 0 62 62">
-              <circle cx="31" cy="31" r={radius} stroke="var(--border)" />
+            <svg viewBox="0 0 56 56">
+              <circle cx="28" cy="28" r={radius} stroke="var(--border)" />
               <circle
-                cx="31"
-                cy="31"
+                cx="28"
+                cy="28"
                 r={radius}
                 stroke={allPassed ? "var(--success)" : "var(--accent)"}
                 strokeDasharray={circumference}
@@ -1107,24 +1321,96 @@ export default function App() {
           </div>
           <div className="feedback-message">
             <div className="main-msg" style={{ color: allPassed ? "var(--success)" : "var(--text)" }}>
-              {summaryMessage}
+              {isGuidedHold ? session.currentGuideStage?.label : summaryMessage}
             </div>
             <div className="sub-msg">
-              {allPassed ? "자세를 유지하세요!" : "아래 체크포인트를 확인하세요"}
+              {isGuidedHold
+                ? `단계 ${session.guideStageIdx + 1} / ${session.guideStageCount}`
+                : allPassed ? "자세를 유지하세요!" : "아래 체크포인트를 확인하세요"}
             </div>
           </div>
         </div>
 
-        <div className="feedback-checks">
-          {checks.map((check, i) => (
-            <div key={i} className={`check-item ${check.passed ? "passed" : "failed"}`}>
-              <span className="check-icon">{check.passed ? "✅" : "⚠️"}</span>
-              <div className="check-text">
-                <div className="check-name">{check.name}</div>
-                <div className="check-msg">{check.message}</div>
-              </div>
+        {/* 가이드 단계 진행 바 */}
+        {session?.motion?.holdStages && (
+          <div className="stage-progress">
+            <div className="stage-progress-bar">
+              {session.motion.holdStages.map((_, i) => (
+                <div
+                  key={i}
+                  className={`stage-dot ${
+                    i < session.guideStageIdx ? "completed" :
+                    i === session.guideStageIdx && !session.guideStageDone ? "active" :
+                    session.guideStageDone ? "completed" : "pending"
+                  }`}
+                />
+              ))}
+              <div className={`stage-dot ${session.guideStageDone ? "active" : "pending"}`} />
             </div>
-          ))}
+            {/* 단계 확인 progress bar */}
+            {isGuidedHold && session.guideStageConfirmSec > 0 && (
+              <div className="stage-confirm-bar">
+                <div
+                  className="stage-confirm-fill"
+                  style={{
+                    width: `${Math.min(
+                      (session.guideStageConfirmSec / session.currentGuideStage.confirmSec) * 100,
+                      100
+                    )}%`
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 전체 단계 완료 배너 */}
+        {session?.guideStageDone && session.motion.holdStages && (
+          <div className="stage-complete-banner">
+            자세 완성! {session.customHoldGoal}초 유지하세요
+          </div>
+        )}
+
+        <div className="feedback-checks">
+          {checks.map((check, i) => {
+            const isLocked = isGuidedHold && i > session.guideStageIdx;
+            const isCurrentStage = isGuidedHold && i === session.guideStageIdx;
+
+            return (
+              <div key={i} className={`check-item ${
+                isLocked ? "locked" : check.passed ? "passed" : "failed"
+              } ${isCurrentStage ? "current-stage" : ""}`}>
+                <span className={`check-icon ${session?.motion?.holdStages ? "has-skeleton" : ""}`}>
+                  {session?.motion?.holdStages ? (
+                    <StageSkeleton
+                      motionId={parseInt(session.mid)}
+                      stageIndex={i}
+                      color={
+                        isLocked ? "var(--text3)" :
+                        check.passed ? "var(--success)" :
+                        isCurrentStage ? "var(--accent)" :
+                        "var(--warning)"
+                      }
+                      highlightColor={
+                        isLocked ? "var(--text3)" :
+                        isCurrentStage ? "#fff" :
+                        undefined
+                      }
+                      size={36}
+                    />
+                  ) : (
+                    isLocked ? "🔒" : check.passed ? "✅" : isCurrentStage ? "👉" : "⚠️"
+                  )}
+                </span>
+                <div className="check-text">
+                  <div className="check-name">{check.name}</div>
+                  <div className="check-msg">
+                    {isLocked ? "이전 단계를 완료하세요" : check.message}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -1201,6 +1487,29 @@ export default function App() {
     );
   }
 
+  // localStorage 데이터 병합 (Supabase 데이터가 없는 동작만)
+  function mergeLocalStorage() {
+    for (let i = 1; i <= 6; i++) {
+      const clf = classifiersRef.current[i];
+      // Supabase에서 이미 로드된 데이터가 있으면 건너뛰기 (중복 방지)
+      if (clf.totalSamples > 0) continue;
+
+      const saved = localStorage.getItem(`swim_knn_${i}`);
+      if (saved) {
+        try {
+          const localSamples = JSON.parse(saved);
+          for (const [label, features] of Object.entries(localSamples)) {
+            for (const feat of features) {
+              clf.addSample(label, feat);
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to merge local data for motion ${i}:`, e);
+        }
+      }
+    }
+  }
+
   // 학교 관리자 로그인
   async function handleAdminLogin(schoolId, password) {
     try {
@@ -1214,8 +1523,11 @@ export default function App() {
         // 해당 학교 데이터 다시 로드
         setDataLoading(true);
         for (let i = 1; i <= 6; i++) {
-          await classifiersRef.current[i].loadFromSupabase(schoolId);
+          await classifiersRef.current[i].loadFromSupabase(
+            i.toString(), MOTIONS[i].steps, schoolId
+          );
         }
+        mergeLocalStorage();
         setDataLoading(false);
         forceUpdate(n => n + 1);
       } else {
@@ -1245,17 +1557,102 @@ export default function App() {
     }
   }
 
-  // 학교 선택 (일반 사용자)
+  // localStorage → Supabase 업로드
+  // motionId: 특정 동작만 업로드 (null이면 전체)
+  // overwrite: true면 덮어쓰기, false면 추가
+  async function handleUploadToSupabase(motionId = null, overwrite = false) {
+    const schoolId = selectedSchoolId || DEFAULT_SCHOOL_ID;
+    let totalUploaded = 0;
+    const motionIds = motionId ? [motionId] : [1, 2, 3, 4, 5, 6];
+
+    // 총 업로드할 샘플 수 미리 계산
+    let totalToUpload = 0;
+    for (const mid of motionIds) {
+      const saved = localStorage.getItem(`swim_knn_${mid}`);
+      if (!saved) continue;
+      const localSamples = JSON.parse(saved);
+      const m = MOTIONS[mid];
+      for (const [label, features] of Object.entries(localSamples)) {
+        if (m.steps.indexOf(label) !== -1) totalToUpload += features.length;
+      }
+    }
+
+    if (totalToUpload === 0) {
+      await showModal({ title: "업로드 실패", message: "업로드할 로컬 데이터가 없습니다." });
+      return;
+    }
+
+    setLoadingMsg(`업로드 준비 중... 0/${totalToUpload}`);
+    setDataLoading(true);
+
+    try {
+      if (overwrite) {
+        setLoadingMsg("기존 데이터 삭제 중...");
+        if (motionId) {
+          await deleteTrainingData(motionId.toString(), schoolId);
+        } else {
+          await deleteAllTrainingDataBySchool(schoolId);
+        }
+      }
+
+      for (const mid of motionIds) {
+        const saved = localStorage.getItem(`swim_knn_${mid}`);
+        if (!saved) continue;
+
+        const localSamples = JSON.parse(saved);
+        const m = MOTIONS[mid];
+
+        for (const [label, features] of Object.entries(localSamples)) {
+          const stepIndex = m.steps.indexOf(label);
+          if (stepIndex === -1) continue;
+
+          for (const feat of features) {
+            await saveTrainingData(mid.toString(), stepIndex, feat, schoolId);
+            totalUploaded++;
+            if (totalUploaded % 5 === 0 || totalUploaded === totalToUpload) {
+              setLoadingMsg(`업로드 중... ${totalUploaded}/${totalToUpload}`);
+            }
+          }
+        }
+      }
+      // 업로드 성공 후 localStorage 정리 (중복 로딩 방지)
+      for (const mid of motionIds) {
+        localStorage.removeItem(`swim_knn_${mid}`);
+      }
+
+      // Supabase에서 다시 로드하여 라벨 동기화
+      for (let i = 1; i <= 6; i++) {
+        await classifiersRef.current[i].loadFromSupabase(
+          i.toString(), MOTIONS[i].steps, schoolId || null
+        );
+      }
+
+      setDataLoading(false);
+      setLoadingMsg("");
+      forceUpdate(n => n + 1);
+      await showModal({ title: "업로드 완료", message: `${totalUploaded}개 샘플이 서버에 업로드되었습니다.\n로컬 임시 데이터는 정리되었습니다.` });
+    } catch (err) {
+      console.error("Upload failed:", err);
+      setDataLoading(false);
+      setLoadingMsg("");
+      await showModal({ title: "업로드 오류", message: `업로드 중 오류가 발생했습니다.\n(${totalUploaded}/${totalToUpload}개 완료)` });
+    }
+  }
+
+  // 학교 선택
   async function handleSchoolSelect(schoolId) {
-    setSelectedSchoolId(schoolId);
     setIsAdmin(false);
+    setSelectedSchoolId(schoolId);
     localStorage.setItem("swim_school_id", schoolId);
 
     // 해당 학교 데이터 로드
     setDataLoading(true);
     for (let i = 1; i <= 6; i++) {
-      await classifiersRef.current[i].loadFromSupabase(schoolId || null);
+      await classifiersRef.current[i].loadFromSupabase(
+        i.toString(), MOTIONS[i].steps, schoolId || null
+      );
     }
+    mergeLocalStorage();
     setDataLoading(false);
     forceUpdate(n => n + 1);
     showToast(schoolId ? "학교 데이터 로드 완료" : "기본 데이터 로드 완료");
@@ -1313,19 +1710,51 @@ export default function App() {
           </select>
 
           {/* 관리자 로그인 */}
-          {selectedSchoolId && !isAdmin && (
+          {!isAdmin && !showAdminLogin && (
             <button
               className="setting-btn"
               style={{ marginTop: "12px" }}
-              onClick={() => {
-                const password = prompt("관리자 비밀번호를 입력하세요:");
-                if (password) {
-                  handleAdminLogin(selectedSchoolId, password);
-                }
-              }}
+              onClick={() => setShowAdminLogin(true)}
             >
               🔐 관리자 로그인
             </button>
+          )}
+
+          {!isAdmin && showAdminLogin && (
+            <div className="admin-login-box" style={{ marginTop: "12px" }}>
+              <div className="admin-login-header">
+                <span>🔐 {selectedSchoolId ? (schools.find(s => s.id === selectedSchoolId)?.name || "학교") : "기본 (개발자)"} 관리자</span>
+                <button className="admin-login-close" onClick={() => { setShowAdminLogin(false); setAdminPassword(""); }}>✕</button>
+              </div>
+              <div className="admin-login-input-row">
+                <input
+                  type="password"
+                  placeholder="비밀번호를 입력하세요"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && adminPassword) {
+                      handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
+                      setAdminPassword("");
+                      setShowAdminLogin(false);
+                    }
+                  }}
+                  className="admin-login-input"
+                  autoFocus
+                />
+                <button
+                  className="admin-login-submit"
+                  disabled={!adminPassword}
+                  onClick={() => {
+                    handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
+                    setAdminPassword("");
+                    setShowAdminLogin(false);
+                  }}
+                >
+                  확인
+                </button>
+              </div>
+            </div>
           )}
 
           {/* 관리자 로그아웃 */}
@@ -1335,6 +1764,7 @@ export default function App() {
               style={{ marginTop: "12px" }}
               onClick={() => {
                 setIsAdmin(false);
+                setShowAdminLogin(false);
                 showToast("관리자 로그아웃");
               }}
             >
@@ -1342,20 +1772,17 @@ export default function App() {
             </button>
           )}
 
-          {/* 학교 생성 */}
-          <button
+          {/* 학교 생성 (관리자 전용) */}
+          {isAdmin && (<button
             className="setting-btn"
             style={{ marginTop: "8px" }}
-            onClick={() => {
-              const name = prompt("새 학교 이름을 입력하세요:");
-              if (!name) return;
-              const password = prompt("관리자 비밀번호를 설정하세요:");
-              if (!password) return;
-              handleCreateSchool(name, password);
+            onClick={async () => {
+              const result = await showModal({ type: "prompt2", title: "새 학교 등록", message: "학교 이름과 관리자 비밀번호를 입력하세요.", placeholder: "학교 이름", placeholder2: "관리자 비밀번호" });
+              if (result) handleCreateSchool(result.val1, result.val2);
             }}
           >
             ➕ 새 학교 등록
-          </button>
+          </button>)}
 
           {dataLoading && (
             <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px" }}>
@@ -1413,8 +1840,8 @@ export default function App() {
           </button>
         </div>
 
-        {/* 데이터 관리 */}
-        <div className="settings-section">
+        {/* 데이터 관리 (관리자 전용) */}
+        {isAdmin && (<div className="settings-section">
           <h3>학습 데이터</h3>
           {Object.entries(MOTIONS).map(([id, m]) => {
             const clf = classifiersRef.current[id];
@@ -1466,9 +1893,28 @@ export default function App() {
                     내보내기
                   </button>
                   <button
+                    disabled={dataLoading || total === 0}
+                    onClick={async () => {
+                      const ok = await showModal({ title: `${m.name} 업로드`, message: "서버에 추가합니다. (기존 데이터 유지)" });
+                      if (ok) handleUploadToSupabase(parseInt(id), false);
+                    }}
+                  >
+                    ☁️ 추가
+                  </button>
+                  <button
+                    disabled={dataLoading || total === 0}
+                    onClick={async () => {
+                      const ok = await showModal({ title: `${m.name} 덮어쓰기`, message: "서버의 기존 데이터를 삭제하고 새로 업로드합니다.", danger: true });
+                      if (ok) handleUploadToSupabase(parseInt(id), true);
+                    }}
+                  >
+                    🔄 덮어쓰기
+                  </button>
+                  <button
                     className="delete"
-                    onClick={() => {
-                      if (confirm(`${m.name}의 모든 학습 데이터를 삭제할까요?`)) {
+                    onClick={async () => {
+                      const ok = await showModal({ title: "데이터 삭제", message: `${m.name}의 모든 학습 데이터를 삭제할까요?`, danger: true });
+                      if (ok) {
                         clf?.clear();
                         localStorage.removeItem(`swim_knn_${id}`);
                         showToast("삭제 완료");
@@ -1482,11 +1928,30 @@ export default function App() {
               </div>
             );
           })}
-        </div>
+        </div>)}
 
-        {/* 전체 작업 */}
-        <div className="settings-section">
+        {isAdmin && (<div className="settings-section">
           <h3>전체 데이터</h3>
+          <button
+            className="setting-btn primary"
+            onClick={async () => {
+              const ok = await showModal({ title: "전체 추가 업로드", message: "모든 로컬 학습 데이터를 서버에 추가합니다.\n기존 서버 데이터는 유지됩니다." });
+              if (ok) handleUploadToSupabase(null, false);
+            }}
+            disabled={dataLoading}
+          >
+            {dataLoading ? "⏳ 업로드 중..." : "☁️ 전체 추가 업로드"}
+          </button>
+          <button
+            className="setting-btn"
+            onClick={async () => {
+              const ok = await showModal({ title: "전체 덮어쓰기", message: "서버의 기존 데이터를 모두 삭제하고\n로컬 데이터로 새로 업로드합니다.", danger: true });
+              if (ok) handleUploadToSupabase(null, true);
+            }}
+            disabled={dataLoading}
+          >
+            🔄 전체 덮어쓰기
+          </button>
           <button
             className="setting-btn"
             onClick={() => {
@@ -1548,8 +2013,9 @@ export default function App() {
 
           <button
             className="setting-btn danger"
-            onClick={() => {
-              if (confirm("모든 데이터(학습 데이터 + 연습 기록)를 삭제할까요?\n이 작업은 되돌릴 수 없습니다.")) {
+            onClick={async () => {
+              const ok = await showModal({ title: "전체 삭제", message: "모든 데이터(학습 데이터 + 연습 기록)를 삭제할까요?\n이 작업은 되돌릴 수 없습니다.", danger: true });
+              if (ok) {
                 for (let i = 1; i <= 6; i++) {
                   localStorage.removeItem(`swim_knn_${i}`);
                   classifiersRef.current[i]?.clear();
@@ -1562,33 +2028,8 @@ export default function App() {
           >
             🗑 전체 삭제
           </button>
-        </div>
+        </div>)}
 
-        {/* 앱 정보 */}
-        <div className="settings-section">
-          <h3>앱 정보</h3>
-          <div className="setting-item">
-            <span className="setting-icon">🏊</span>
-            <div className="setting-text">
-              <h4>생존수영 트레이너</h4>
-              <p>MediaPipe + KNN 기반 실시간 동작 분석</p>
-            </div>
-          </div>
-          <div className="setting-item">
-            <span className="setting-icon">💾</span>
-            <div className="setting-text">
-              <h4>데이터 저장</h4>
-              <p>브라우저 localStorage (서버 저장 없음)</p>
-            </div>
-          </div>
-          <div className="setting-item">
-            <span className="setting-icon">{modelReady ? "✅" : "⏳"}</span>
-            <div className="setting-text">
-              <h4>AI 모델</h4>
-              <p>{modelReady ? "준비 완료" : "로딩 중..."}</p>
-            </div>
-          </div>
-        </div>
       </div>
     );
   }
@@ -1647,6 +2088,71 @@ export default function App() {
             <span className="tab-label">설정</span>
           </button>
         </nav>
+      )}
+
+      {/* 로딩 오버레이 */}
+      {dataLoading && loadingMsg && (
+        <div className="loading-overlay">
+          <div className="loading-spinner" />
+          <p className="loading-text">{loadingMsg}</p>
+        </div>
+      )}
+
+      {/* 커스텀 모달 */}
+      {modal && (
+        <div className="modal-overlay" onClick={() => closeModal(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            {modal.title && <h3 className="modal-title">{modal.title}</h3>}
+            {modal.message && <p className="modal-message">{modal.message}</p>}
+
+            {(modal.type === "prompt" || modal.type === "prompt2") && (
+              <input
+                className="modal-input"
+                type="text"
+                placeholder={modal.placeholder || ""}
+                value={modal.inputVal}
+                onChange={(e) => setModal(prev => ({ ...prev, inputVal: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && modal.type === "prompt" && modal.inputVal) closeModal(modal.inputVal);
+                }}
+                autoFocus
+              />
+            )}
+            {modal.type === "prompt2" && (
+              <input
+                className="modal-input"
+                type="password"
+                placeholder={modal.placeholder2 || ""}
+                value={modal.inputVal2}
+                onChange={(e) => setModal(prev => ({ ...prev, inputVal2: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && modal.inputVal && modal.inputVal2) closeModal({ val1: modal.inputVal, val2: modal.inputVal2 });
+                }}
+              />
+            )}
+
+            <div className="modal-buttons">
+              <button className="modal-btn cancel" onClick={() => closeModal(null)}>취소</button>
+              {modal.type === "confirm" && (
+                <button className={`modal-btn ok ${modal.danger ? "danger" : ""}`} onClick={() => closeModal(true)}>확인</button>
+              )}
+              {modal.type === "prompt" && (
+                <button className="modal-btn ok" disabled={!modal.inputVal} onClick={() => closeModal(modal.inputVal)}>확인</button>
+              )}
+              {modal.type === "prompt2" && (
+                <button className="modal-btn ok" disabled={!modal.inputVal || !modal.inputVal2} onClick={() => closeModal({ val1: modal.inputVal, val2: modal.inputVal2 })}>확인</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 자세 미리보기 오버레이 */}
+      {previewImage && (
+        <div className="preview-overlay" onClick={() => setPreviewImage(null)}>
+          <img src={previewImage} alt="자세 미리보기" />
+          <button className="preview-close" onClick={() => setPreviewImage(null)}>✕</button>
+        </div>
       )}
 
       {/* 토스트 */}
