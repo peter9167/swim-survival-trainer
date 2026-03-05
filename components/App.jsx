@@ -66,23 +66,42 @@ const LEARN_CONTENT = {
 };
 
 export default function App() {
-  // 탭 상태
-  const [activeTab, setActiveTab] = useState("home");
+  // 탭 상태 (sessionStorage에서 복원)
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = sessionStorage.getItem("swim_tab");
+      // 삭제된 탭이면 practice로 리다이렉트
+      if (saved === "home" || saved === "history") return "practice";
+      return saved || "practice";
+    }
+    return "practice";
+  });
 
   // 연습/녹화 상태
-  const [practiceMode, setPracticeMode] = useState(null); // null | "select" | "instant" | "knn" | "record"
+  const [practiceMode, setPracticeMode] = useState(null);
   const [currentMotion, setCurrentMotion] = useState(null);
   const [selectedStep, setSelectedStep] = useState(0);
   const [holdGoalInput, setHoldGoalInput] = useState(30);
+  const [cycleGoalInput, setCycleGoalInput] = useState(5);
 
-  // 학습 상태
-  const [learnView, setLearnView] = useState(null); // null | motionId | "intro" | "safety" | "cpr"
+  // 학습 상태 (sessionStorage에서 복원)
+  const [learnView, setLearnView] = useState(() => {
+    if (typeof window !== "undefined") {
+      const v = sessionStorage.getItem("swim_learn");
+      if (v) {
+        const n = parseInt(v);
+        return isNaN(n) ? v : n; // 숫자면 motionId, 아니면 문자열("intro" 등)
+      }
+    }
+    return null;
+  });
 
   // 카메라/AI 상태
   const [cameraActive, setCameraActive] = useState(false);
   const [fps, setFps] = useState(0);
   const [modelReady, setModelReady] = useState(false);
   const [practiceComplete, setPracticeComplete] = useState(null); // 완료 결과 {motionId, holdSec, cycles, score}
+  const [countdown, setCountdown] = useState(0); // 3,2,1 카운트다운
   const [, forceUpdate] = useState(0);
 
   // 카메라 선택
@@ -138,6 +157,7 @@ export default function App() {
   const practiceModeRef = useRef(practiceMode);
   const currentMotionRef = useRef(currentMotion);
   const graceStartRef = useRef(null); // 유예 시간 시작 시점
+  const countdownRef = useRef(0);
   const feedbackRef = useRef(null); // 피드백 ref (매 프레임 업데이트)
   const lastUIUpdateRef = useRef(0); // UI 업데이트 쓰로틀 타이머
   const UI_THROTTLE_MS = 150; // UI 업데이트 간격 (ms)
@@ -145,6 +165,13 @@ export default function App() {
   // refs를 최신 상태로 동기화 (mainLoop 스테일 클로저 방지)
   practiceModeRef.current = practiceMode;
   currentMotionRef.current = currentMotion;
+
+  // sessionStorage에 네비게이션 상태 저장
+  useEffect(() => {
+    sessionStorage.setItem("swim_tab", activeTab);
+    if (learnView != null) sessionStorage.setItem("swim_learn", String(learnView));
+    else sessionStorage.removeItem("swim_learn");
+  }, [activeTab, learnView]);
 
   // ═══════════════════════════════════════════════════════════
   // 초기화
@@ -241,14 +268,13 @@ export default function App() {
     }
   }
 
-  // 초기 카메라 목록 로드
-  useEffect(() => {
-    loadCameras();
-  }, []);
-
   async function startCamera() {
     if (streamRef.current) return;
     try {
+      // 카메라 목록이 없으면 먼저 로드
+      if (cameras.length === 0) {
+        await loadCameras();
+      }
       // 16:9 해상도 선호 (카메라가 지원하면 사용, 아니면 가능한 해상도 사용)
       const videoConstraints = {
         width: { ideal: 1280 },
@@ -335,6 +361,9 @@ export default function App() {
       const pm = practiceModeRef.current;
       const cm = currentMotionRef.current;
 
+      // 대기 또는 카운트다운 중이면 피드백 처리 건너뛰기
+      if (countdownRef.current !== 0) return;
+
       // 즉시 연습 모드 또는 KNN 모드: 규칙 기반 피드백은 항상 실행
       if ((pm === "instant" || pm === "knn") && cm) {
         const fb = evaluatePose(cm, lms, feedbackHistoryRef.current);
@@ -366,15 +395,40 @@ export default function App() {
               }
             }
             needsUIUpdate = true;
+          } else if (session && session.motion.guidedCycles && fb.phase) {
+            // ── 순차 확인 사이클 (스컬링: 벌리기→모으기 = 1회) ──
+            graceStartRef.current = null;
+            session.updateGuidedCycle(fb.phase, timestamp / 1000);
+            if (session.flashMsg && performance.now() - session.flashTime < 100) {
+              addFlash(session.flashMsg);
+              session.flashMsg = "";
+            }
+            needsUIUpdate = true;
+          } else if (session && session.motion.guidedCycles && !fb.phase) {
+            // 순차 확인 동작인데 phase 없음 (전환 중) → 타이머 리셋만
+            session.guidedPhaseConfirmStart = null;
+            session.guidedPhaseConfirmSec = 0;
+            needsUIUpdate = true;
+          } else if (session && session.motion.instantGoal) {
+            // ── 시퀀스 동작 즉시 모드: 자세 체크만 통과하면 누적 ──
+            const coreChecks = fb.checks.filter(c => c.priority <= 2);
+            const corePassed = coreChecks.length > 0 && coreChecks.every(c => c.passed);
+            if (corePassed) {
+              graceStartRef.current = null;
+              session.updateInstantHold(timestamp / 1000);
+            } else {
+              // 자세 미달: 시간 누적 일시정지 (리셋하지 않음)
+              session.holdStart = null;
+            }
+            if (session.flashMsg && performance.now() - session.flashTime < 100) {
+              addFlash(session.flashMsg);
+              session.flashMsg = "";
+            }
+            needsUIUpdate = true;
           } else if (session && fb.allPassed) {
             // ── 전체 체크 통과 (가이드 완료 후 최종 유지 또는 비가이드) ──
             graceStartRef.current = null;
-            if (session.motion.instantGoal) {
-              // 시퀀스 동작 즉시 모드: 시간 기반 추적
-              session.updateInstantHold(timestamp / 1000);
-            } else {
-              session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
-            }
+            session.update(session.motion.sequence[0] || "완료", 1.0, timestamp / 1000);
             if (session.flashMsg && performance.now() - session.flashTime < 100) {
               addFlash(session.flashMsg);
               session.flashMsg = "";
@@ -401,7 +455,20 @@ export default function App() {
           if (session && clf && clf.numClasses >= 2) {
             const features = extractFeatures(lms);
             const { label, confidence } = clf.predict(features);
-            session.update(label, confidence, timestamp / 1000);
+
+            if (session.motion.guidedCycles) {
+              // guidedCycles 동작: KNN 예측 label을 phase로 사용
+              const seq = session.motion.sequence;
+              if (confidence > 0.45 && seq.includes(label)) {
+                session.updateGuidedCycle(label, timestamp / 1000);
+              } else {
+                // 낮은 신뢰도 또는 준비자세 → 확인 타이머 리셋
+                session.guidedPhaseConfirmStart = null;
+                session.guidedPhaseConfirmSec = 0;
+              }
+            } else {
+              session.update(label, confidence, timestamp / 1000);
+            }
 
             if (session.flashMsg && performance.now() - session.flashTime < 100) {
               addFlash(session.flashMsg);
@@ -431,7 +498,8 @@ export default function App() {
             targetCycles: m.targetCycles,
             holdGoal: session.customHoldGoal,
             score: session.score,
-            holdMode: m.holdMode || !!m.instantGoal,
+            holdMode: !!m.holdMode,
+            instantGoal: !!m.instantGoal,
           });
           setFeedback(feedbackRef.current);
           forceUpdate(n => n + 1);
@@ -525,42 +593,90 @@ export default function App() {
     }, 2500);
   }
 
-  async function recordSample() {
+  // 녹화 세션 중 새로 추가된 샘플 추적 (저장 버튼 시 일괄 업로드용)
+  const recordedSamplesRef = useRef([]);
+
+  function recordSample() {
     if (!lastPoseRef.current || !currentMotion) return;
     const m = MOTIONS[currentMotion];
     const stepName = m.steps[selectedStep];
     const features = extractFeatures(lastPoseRef.current);
     const clf = classifiersRef.current[currentMotion];
 
-    // 관리자 모드일 때만 Supabase에 저장
+    // 로컬 KNN에 즉시 추가 (실시간 확인용)
+    clf.addSample(stepName, features);
+    localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
+
+    // 관리자: 나중에 일괄 업로드할 샘플 기록
     if (isAdmin && selectedSchoolId) {
-      const success = await clf.addSampleToSupabase(
-        currentMotion.toString(),
-        selectedStep,
-        stepName,
-        features,
-        selectedSchoolId
-      );
-      if (success) {
-        const cnt = clf.getSampleCounts()[stepName] || 0;
-        addFlash(`${stepName} 녹화! (${cnt}개)`);
-      } else {
-        showToast("저장 실패", "error");
-      }
-    } else {
-      // 비관리자: localStorage에만 저장 (기존 방식)
-      clf.addSample(stepName, features);
-      localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
-      const cnt = clf.getSampleCounts()[stepName] || 0;
-      addFlash(`${stepName} 녹화! (${cnt}개)`);
+      recordedSamplesRef.current.push({
+        motionId: currentMotion.toString(),
+        stepIndex: selectedStep,
+        features: [...features],
+      });
     }
 
+    const cnt = clf.getSampleCounts()[stepName] || 0;
+    addFlash(`${stepName} 녹화! (${cnt}개)`);
+    forceUpdate(n => n + 1);
+  }
+
+  async function saveRecordedSamples() {
+    const samples = recordedSamplesRef.current;
+    if (!samples.length || !selectedSchoolId) {
+      exitPractice();
+      return;
+    }
+
+    const total = samples.length;
+    setLoadingMsg(`업로드 중... 0/${total}`);
+    setDataLoading(true);
+
+    let uploaded = 0;
+    let failed = 0;
+    for (const s of samples) {
+      try {
+        await saveTrainingData(s.motionId, s.stepIndex, s.features, selectedSchoolId);
+        uploaded++;
+      } catch {
+        failed++;
+      }
+      if (uploaded % 3 === 0 || uploaded + failed === total) {
+        setLoadingMsg(`업로드 중... ${uploaded + failed}/${total}`);
+      }
+    }
+
+    setDataLoading(false);
+    setLoadingMsg("");
+    recordedSamplesRef.current = [];
+
+    if (failed > 0) {
+      showToast(`${uploaded}개 저장 완료, ${failed}개 실패`, "error");
+    } else {
+      showToast(`${uploaded}개 저장 완료`);
+    }
+    exitPractice();
+  }
+
+  async function deleteLabel(stepName) {
+    const clf = classifiersRef.current[currentMotion];
+    if (!clf) return;
+    const cnt = clf.getSampleCounts()[stepName] || 0;
+    const ok = await showModal({ title: "데이터 삭제", message: `"${stepName}" 데이터 ${cnt}개를 삭제할까요?`, danger: true });
+    if (!ok) return;
+    clf.clearLabel(stepName);
+    localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
+    showToast(`${stepName} 데이터 삭제됨`);
     forceUpdate(n => n + 1);
   }
 
   // ── 키보드 단축키 (SPACE: 녹화, ESC: 종료) ──
   useEffect(() => {
     function onKey(e) {
+      if (e.key === "Escape" && modal) {
+        closeModal(false);
+        return;
+      }
       if (e.key === "Escape" && previewImage) {
         setPreviewImage(null);
         return;
@@ -576,30 +692,75 @@ export default function App() {
         if (e.key === "Escape") {
           exitPractice();
         }
+      } else if (e.key === "Escape" && learnView != null) {
+        setLearnView(null);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [practiceMode, currentMotion, selectedStep, previewImage]);
+  }, [practiceMode, currentMotion, selectedStep, previewImage, modal, learnView]);
 
   function startPractice(motionId, mode) {
     setCurrentMotion(motionId);
     const m = MOTIONS[motionId];
     const goal = m.holdMode ? holdGoalInput : null;
-    sessionRef.current = new PracticeSession(motionId, goal);
+    const cycles = m.guidedCycles ? cycleGoalInput : null;
+    sessionRef.current = new PracticeSession(motionId, goal, cycles);
     feedbackHistoryRef.current.clear();
     setPracticeMode(mode);
     startCamera();
+
+    if (mode === "record") {
+      // 녹화 모드: 바로 시작
+      recordedSamplesRef.current = [];
+      countdownRef.current = 0;
+      setCountdown(0);
+    } else {
+      // 즉시/AI 모드: 시작 버튼 대기 상태
+      countdownRef.current = -1;
+      setCountdown(-1);
+    }
+  }
+
+  function beginCountdown() {
+    // 시작 시점의 최신 설정으로 세션 재생성
+    const m = MOTIONS[currentMotion];
+    const goal = m.holdMode ? holdGoalInput : null;
+    const cycles = m.guidedCycles ? cycleGoalInput : null;
+    sessionRef.current = new PracticeSession(currentMotion, goal, cycles);
+    feedbackHistoryRef.current.clear();
+
+    countdownRef.current = 3;
+    setCountdown(3);
+    const tick = setInterval(() => {
+      countdownRef.current--;
+      setCountdown(countdownRef.current);
+      if (countdownRef.current <= 0) {
+        clearInterval(tick);
+      }
+    }, 1000);
   }
 
   function exitPractice() {
+    const wasRecord = practiceMode === "record";
     stopCamera();
-    setPracticeMode(null);
-    setCurrentMotion(null);
+    countdownRef.current = 0;
+    setCountdown(0);
     sessionRef.current = null;
     setFeedback(null);
     feedbackRef.current = null;
+    feedbackHistoryRef.current.clear();
     setPracticeComplete(null);
+    if (wasRecord) {
+      // 녹화 모드는 설정에서 진입했으므로 설정으로 돌아감
+      setPracticeMode(null);
+      setCurrentMotion(null);
+      setActiveTab("settings");
+    } else {
+      // 연습 모드는 동작 목록으로 돌아감
+      setPracticeMode(null);
+      setCurrentMotion(null);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -624,54 +785,6 @@ export default function App() {
   // 탭 렌더링
   // ═══════════════════════════════════════════════════════════
 
-  // 홈 탭
-  function renderHomeTab() {
-    return (
-      <div className="main-content">
-        <div className="home-hero">
-          <div className="hero-icon">🏊</div>
-          <h1>생존수영 트레이너</h1>
-          <p>AI 기반 실시간 동작 분석 시스템</p>
-        </div>
-
-        <div className="home-section">
-          <div className="section-title">🎯 생존수영 동작</div>
-          <div className="motion-cards-grid">
-            {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
-              const clf = classifiersRef.current[id];
-              const total = clf?.totalSamples || 0;
-
-              return (
-                <div
-                  key={id}
-                  className="motion-card"
-                  onClick={() => {
-                    setActiveTab("practice");
-                    setPracticeMode("select");
-                    setCurrentMotion(parseInt(id));
-                    setHoldGoalInput(m.holdGoal || 30);
-                  }}
-                >
-                  <div className="card-icon">{m.icon}</div>
-                  <div className="card-info">
-                    <h3>
-                      {m.name}
-                      <span className={`card-badge ${m.posture === "standing" ? "badge-standing" : "badge-seated"}`}>
-                        {m.posture === "standing" ? "서서" : "앉아서"}
-                      </span>
-                    </h3>
-                    <p>{m.desc}</p>
-                  </div>
-                  <div className="card-arrow">›</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // 학습 탭
   function renderLearnTab() {
     if (learnView) {
@@ -686,69 +799,65 @@ export default function App() {
         </div>
 
         {/* 생존수영 소개 */}
-        <div className="learn-category">
-          <div className="category-header">생존수영 소개</div>
-          <div className="learn-item" onClick={() => setLearnView("intro")}>
-            <span className="item-icon">📘</span>
-            <div className="item-text">
-              <h4>생존수영이란</h4>
+        <div className="motion-select">
+          <h2>생존수영 소개</h2>
+          <div className="motion-select-card" onClick={() => setLearnView("intro")}>
+            <div className="sel-icon">📘</div>
+            <div className="sel-info">
+              <h3>생존수영이란</h3>
               <p>생존수영의 정의와 필요성</p>
             </div>
-            <span className="item-arrow">›</span>
           </div>
         </div>
 
         {/* 생존뜨기 */}
-        <div className="learn-category">
-          <div className="category-header">생존뜨기</div>
+        <div className="motion-select">
+          <h2>생존뜨기</h2>
           {[1, 2, 6].filter(id => !MOTIONS[id].hidden).map(id => {
             const m = MOTIONS[id];
             return (
-              <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
-                <span className="item-icon">{m.icon}</span>
-                <div className="item-text">
-                  <h4>{m.name}</h4>
+              <div key={id} className="motion-select-card" onClick={() => setLearnView(id)}>
+                <div className="sel-icon">{m.icon}</div>
+                <div className="sel-info">
+                  <h3>{m.name}</h3>
                   <p>{m.sub}</p>
                 </div>
-                <span className="item-arrow">›</span>
               </div>
             );
           })}
         </div>
 
         {/* 생존수영 영법 */}
-        <div className="learn-category">
-          <div className="category-header">생존수영 영법</div>
+        <div className="motion-select">
+          <h2>생존수영 영법</h2>
           {[5, 4, 3].map(id => {
             const m = MOTIONS[id];
             return (
-              <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
-                <span className="item-icon">{m.icon}</span>
-                <div className="item-text">
-                  <h4>{m.name}</h4>
+              <div key={id} className="motion-select-card" onClick={() => setLearnView(id)}>
+                <div className="sel-icon">{m.icon}</div>
+                <div className="sel-info">
+                  <h3>{m.name}</h3>
                   <p>{m.sub}</p>
                 </div>
-                <span className="item-arrow">›</span>
               </div>
             );
           })}
         </div>
 
         {/* 안전/응급 */}
-        <div className="learn-category">
-          <div className="category-header">수상안전 / 응급처치</div>
-          <div className="learn-item" onClick={() => setLearnView("safety")}>
-            <span className="item-icon">⚠️</span>
-            <div className="item-text">
-              <h4>물놀이 안전수칙</h4>
+        <div className="motion-select">
+          <h2>수상안전 / 응급처치</h2>
+          <div className="motion-select-card" onClick={() => setLearnView("safety")}>
+            <div className="sel-icon">⚠️</div>
+            <div className="sel-info">
+              <h3>물놀이 안전수칙</h3>
               <p>안전한 물놀이를 위한 수칙</p>
             </div>
-            <span className="item-arrow">›</span>
           </div>
-          <div className="learn-item" onClick={() => setLearnView("cpr")}>
-            <span className="item-icon">❤️</span>
-            <div className="item-text">
-              <h4>심폐소생술</h4>
+          <div className="motion-select-card" onClick={() => setLearnView("cpr")}>
+            <div className="sel-icon">❤️</div>
+            <div className="sel-info">
+              <h3>심폐소생술</h3>
               <p>익수자 구조 후 응급처치</p>
             </div>
             <span className="item-arrow">›</span>
@@ -879,21 +988,20 @@ export default function App() {
           <button
             className="practice-btn"
             onClick={() => {
+              const motionId = learnView;
+              const mot = MOTIONS[motionId];
+              const clf = classifiersRef.current[motionId];
+              const trained = (clf?.numClasses || 0) >= 2;
               setLearnView(null);
               setActiveTab("practice");
-              setPracticeMode("select");
-              setCurrentMotion(learnView);
-              setHoldGoalInput(m.holdGoal || 30);
+              setHoldGoalInput(mot.holdGoal || 30);
+              setCycleGoalInput(mot.targetCycles || 5);
+              startPractice(motionId, trained ? "knn" : "instant");
             }}
           >
             🏊 연습하러 가기
           </button>
 
-          <div className="ref-links">
-            <a href="https://www.safetv.go.kr" target="_blank" rel="noopener noreferrer">
-              📺 안전한TV 교육영상 보기
-            </a>
-          </div>
         </div>
       </div>
     );
@@ -904,11 +1012,6 @@ export default function App() {
     // 카메라 활성 상태 (연습/녹화 중)
     if (practiceMode === "instant" || practiceMode === "knn" || practiceMode === "record") {
       return renderPracticeView();
-    }
-
-    // 동작 선택됨 - 모드 선택
-    if (practiceMode === "select" && currentMotion) {
-      return renderModeSelect();
     }
 
     // 기본 - 동작 선택
@@ -924,15 +1027,16 @@ export default function App() {
           {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
             const clf = classifiersRef.current[id];
             const trained = (clf?.numClasses || 0) >= 2;
+            const mode = trained ? "knn" : "instant";
 
             return (
               <div
                 key={id}
                 className="motion-select-card"
                 onClick={() => {
-                  setCurrentMotion(parseInt(id));
                   setHoldGoalInput(m.holdGoal || 30);
-                  setPracticeMode("select");
+                  setCycleGoalInput(m.targetCycles || 5);
+                  startPractice(parseInt(id), mode);
                 }}
               >
                 <div className="sel-icon">{m.icon}</div>
@@ -943,94 +1047,6 @@ export default function App() {
               </div>
             );
           })}
-        </div>
-      </div>
-    );
-  }
-
-  // 모드 선택 화면
-  function renderModeSelect() {
-    const m = MOTIONS[currentMotion];
-    const clf = classifiersRef.current[currentMotion];
-    const trained = (clf?.numClasses || 0) >= 2;
-    const total = clf?.totalSamples || 0;
-
-    return (
-      <div className="main-content">
-        <div className="practice-header">
-          <button className="back-btn" onClick={() => { setPracticeMode(null); setCurrentMotion(null); }}>←</button>
-          <h2>{m.icon} {m.name}</h2>
-        </div>
-
-        <div className="motion-select" style={{ paddingTop: 10 }}>
-          <p style={{ fontSize: 14, color: "var(--text2)", marginBottom: 16 }}>
-            {m.guide}
-          </p>
-
-          {/* 유지시간 설정 (holdMode만) */}
-          {m.holdMode && (
-            <div className="hold-slider">
-              <label>⏱ 목표 유지 시간</label>
-              <div className="slider-row">
-                <input
-                  type="range"
-                  min={5}
-                  max={60}
-                  step={5}
-                  value={holdGoalInput}
-                  onChange={(e) => setHoldGoalInput(parseInt(e.target.value))}
-                />
-                <span className="slider-value">{holdGoalInput}초</span>
-              </div>
-            </div>
-          )}
-
-          <h2 style={{ marginTop: 20 }}>연습 모드 선택</h2>
-
-          {/* 즉시 연습 */}
-          <div
-            className="motion-select-card"
-            onClick={() => startPractice(currentMotion, "instant")}
-          >
-            <div className="sel-icon">⚡</div>
-            <div className="sel-info">
-              <h3>즉시 연습</h3>
-              <p>학습 데이터 없이 바로 시작 (규칙 기반 피드백)</p>
-            </div>
-          </div>
-
-          {/* KNN 연습 */}
-          <div
-            className="motion-select-card"
-            style={{ opacity: trained ? 1 : 0.5 }}
-            onClick={() => trained && startPractice(currentMotion, "knn")}
-          >
-            <div className="sel-icon">🤖</div>
-            <div className="sel-info">
-              <h3>AI 연습</h3>
-              <p>
-                {trained
-                  ? `학습 데이터 기반 정밀 분석 (${total}개 샘플)`
-                  : "학습 데이터가 필요합니다 (녹화 먼저)"}
-              </p>
-            </div>
-          </div>
-
-          {/* 녹화 모드 */}
-          <div
-            className="motion-select-card"
-            onClick={() => {
-              setSelectedStep(0);
-              setPracticeMode("record");
-              startCamera();
-            }}
-          >
-            <div className="sel-icon">🎬</div>
-            <div className="sel-info">
-              <h3>녹화 모드</h3>
-              <p>AI 학습을 위한 동작 데이터 수집</p>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -1083,6 +1099,38 @@ export default function App() {
           {/* FPS */}
           {cameraActive && <div className="fps-badge">FPS: {fps}</div>}
 
+          {/* 시작 대기 카드 */}
+          {countdown === -1 && (
+            <div className="start-wait-card">
+              <p className="countdown-hint">카메라 위치를 확인하세요</p>
+
+              {/* 유지시간 설정 */}
+              {m.holdMode && (
+                <div className="wait-goal-row">
+                  <button className="goal-adj-btn" onClick={() => setHoldGoalInput(v => Math.max(5, v - 5))}>−</button>
+                  <span className="wait-goal-value">{holdGoalInput}초</span>
+                  <button className="goal-adj-btn" onClick={() => setHoldGoalInput(v => Math.min(60, v + 5))}>+</button>
+                </div>
+              )}
+
+              {/* 횟수 설정 */}
+              {m.guidedCycles && (
+                <div className="wait-goal-row">
+                  <button className="goal-adj-btn" onClick={() => setCycleGoalInput(v => Math.max(1, v - 1))}>−</button>
+                  <span className="wait-goal-value">{cycleGoalInput}회</span>
+                  <button className="goal-adj-btn" onClick={() => setCycleGoalInput(v => Math.min(20, v + 1))}>+</button>
+                </div>
+              )}
+
+              <button className="start-btn" onClick={beginCountdown}>시작</button>
+            </div>
+          )}
+          {countdown > 0 && (
+            <div className="countdown-overlay">
+              <span className="countdown-number">{countdown}</span>
+            </div>
+          )}
+
           {/* 자세 미리보기 버튼 */}
           {m.learnImage && !practiceComplete && (
             <button
@@ -1091,6 +1139,35 @@ export default function App() {
             >
               자세 미리보기
             </button>
+          )}
+
+          {/* 카메라 조정 경고 */}
+          {cameraActive && countdown === 0 && feedback?.cameraWarning && (
+            <div className="camera-warning">{feedback.cameraWarning}</div>
+          )}
+
+          {/* 순차 확인 사이클 가이드 (스컬링 등) */}
+          {!isRecord && m.guidedCycles && session && !session.done && countdown === 0 && (
+            <div className={`guided-cycle-overlay${session.guidedPhaseConfirmSec > 0 ? " confirming" : ""}`}>
+              <span className="guided-cycle-phase">
+                {currentMotion === 4
+                  ? (session.currentGuidedPhase === "벌리기" ? "팔을 벌리세요 ↔" : "↔ 팔을 모으세요")
+                  : currentMotion === 3
+                  ? (session.currentGuidedPhase === "팔올리기" ? "팔을 올리세요 ☝"
+                    : session.currentGuidedPhase === "흔들기좌" ? "← 왼쪽으로 흔드세요"
+                    : "오른쪽으로 흔드세요 →")
+                  : currentMotion === 5
+                  ? (session.currentGuidedPhase === "오른뻗기" ? "오른팔 뻗기 ↑"
+                    : session.currentGuidedPhase === "오른당기기" ? "오른팔 당기기 ↓"
+                    : session.currentGuidedPhase === "왼뻗기" ? "왼팔 뻗기 ↑"
+                    : "왼팔 당기기 ↓")
+                  : session.currentGuidedPhase}
+              </span>
+              <span className="guided-cycle-count">{session.cyclesDone} / {m.targetCycles}회</span>
+              <div className="guided-cycle-progress">
+                <div className="guided-cycle-bar" style={{ width: `${Math.min(session.guidedPhaseConfirmSec / (m.guidedConfirmSec || 0.5) * 100, 100)}%` }} />
+              </div>
+            </div>
           )}
 
           {/* 가이드 단계 스켈레톤 오버레이 */}
@@ -1174,6 +1251,11 @@ export default function App() {
                     <span className="stat-value">{practiceComplete.holdSec.toFixed(1)}</span>
                     <span className="stat-label">초 유지</span>
                   </div>
+                ) : practiceComplete.instantGoal ? (
+                  <div className="complete-stat">
+                    <span className="stat-value">{practiceComplete.holdSec.toFixed(1)}</span>
+                    <span className="stat-label">초 연습</span>
+                  </div>
                 ) : (
                   <div className="complete-stat">
                     <span className="stat-value">{practiceComplete.cycles}</span>
@@ -1213,7 +1295,7 @@ export default function App() {
         {isRecord && renderRecordPanel()}
 
         {/* 피드백 패널 */}
-        {!isRecord && !practiceComplete && cameraActive && renderFeedbackPanel()}
+        {!isRecord && !practiceComplete && renderFeedbackPanel()}
 
         {/* 컨트롤 (녹화 모드만) */}
         {!practiceComplete && isRecord && (
@@ -1221,8 +1303,8 @@ export default function App() {
             <button className="ctrl-btn primary" onClick={recordSample}>
               📷 녹화 (SPACE)
             </button>
-            <button className="ctrl-btn secondary" onClick={exitPractice}>
-              완료
+            <button className="ctrl-btn secondary" onClick={isAdmin && selectedSchoolId ? saveRecordedSamples : exitPractice}>
+              {isAdmin && selectedSchoolId ? "💾 저장" : "완료"}
             </button>
           </div>
         )}
@@ -1248,17 +1330,25 @@ export default function App() {
             else if (cnt > 0) iconClass = "has-data";
 
             return (
-              <button
-                key={step}
-                className={`step-btn ${isActive ? "active" : ""}`}
-                onClick={() => setSelectedStep(i)}
-              >
-                <div className={`step-icon ${iconClass}`}>
-                  {isActive ? "●" : cnt >= 10 ? "✓" : cnt || "·"}
-                </div>
-                <span className="step-name">{step}</span>
-                <span className="step-count">{cnt}개</span>
-              </button>
+              <div key={step} className="step-btn-wrap">
+                <button
+                  className={`step-btn ${isActive ? "active" : ""}`}
+                  onClick={() => setSelectedStep(i)}
+                >
+                  <div className={`step-icon ${iconClass}`}>
+                    {isActive ? "●" : cnt >= 10 ? "✓" : cnt || "·"}
+                  </div>
+                  <span className="step-name">{step}</span>
+                  <span className="step-count">{cnt}개</span>
+                </button>
+                {cnt > 0 && (
+                  <button
+                    className="step-delete-btn"
+                    onClick={(e) => { e.stopPropagation(); deleteLabel(step); }}
+                    title={`${step} 데이터 삭제`}
+                  >×</button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -1421,76 +1511,6 @@ export default function App() {
   }
 
   // 기록 탭
-  function renderHistoryTab() {
-    const history = JSON.parse(localStorage.getItem("swim_history") || "[]");
-
-    // 통계 계산
-    const totalSessions = history.length;
-    const totalMotions = new Set(history.map(h => h.motionId)).size;
-    const avgScore = totalSessions > 0
-      ? Math.round(history.reduce((sum, h) => sum + h.score, 0) / totalSessions)
-      : 0;
-
-    return (
-      <div className="main-content">
-        <div className="page-header">
-          <h1>📊 기록</h1>
-          <p>연습 히스토리 및 통계</p>
-        </div>
-
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-value">{totalSessions}</div>
-            <div className="stat-label">총 연습 횟수</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value">{totalMotions}</div>
-            <div className="stat-label">연습한 동작</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value">{avgScore}</div>
-            <div className="stat-label">평균 점수</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value">{history.filter(h => h.score >= 15).length}</div>
-            <div className="stat-label">성공 횟수</div>
-          </div>
-        </div>
-
-        {history.length === 0 ? (
-          <div className="history-empty">
-            <div className="empty-icon">📝</div>
-            <p>아직 연습 기록이 없습니다</p>
-            <p style={{ marginTop: 8 }}>연습을 완료하면 여기에 기록됩니다</p>
-          </div>
-        ) : (
-          <div className="history-list">
-            {history.slice(0, 20).map((item) => {
-              const m = MOTIONS[item.motionId];
-              const date = new Date(item.date);
-              return (
-                <div key={item.id} className="history-item">
-                  <div className="hist-header">
-                    <span className="hist-icon">{m?.icon || "🏊"}</span>
-                    <div className="hist-title">
-                      <h4>{m?.name || "알 수 없음"}</h4>
-                      <span>{date.toLocaleDateString()} {date.toLocaleTimeString()}</span>
-                    </div>
-                    <span className="hist-score">{item.score}/20</span>
-                  </div>
-                  <div className="hist-details">
-                    {item.holdSec > 0 && <span>유지시간: {item.holdSec.toFixed(1)}초</span>}
-                    {item.cycles > 0 && <span>사이클: {item.cycles}회</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  }
-
   // localStorage 데이터 병합 (Supabase 데이터가 없는 동작만)
   function mergeLocalStorage() {
     for (let i = 1; i <= 6; i++) {
@@ -1502,9 +1522,17 @@ export default function App() {
       if (saved) {
         try {
           const localSamples = JSON.parse(saved);
+          const m = MOTIONS[i];
+          // 옛 라벨→현재 라벨 매핑 (이름 변경 대응)
+          const labelMap = { "밀기": "벌리기", "당기기": "모으기" };
+          const validSteps = new Set(m.steps);
           for (const [label, features] of Object.entries(localSamples)) {
-            for (const feat of features) {
-              clf.addSample(label, feat);
+            const mapped = labelMap[label] || label;
+            // 현재 steps에 있는 라벨만 로드
+            if (validSteps.has(mapped)) {
+              for (const feat of features) {
+                clf.addSample(mapped, feat);
+              }
             }
           }
         } catch (e) {
@@ -1713,6 +1741,20 @@ export default function App() {
             ))}
           </select>
 
+          {/* 새 학교 등록 (관리자 전용) */}
+          {isAdmin && (
+            <button
+              className="setting-btn"
+              style={{ marginTop: "8px" }}
+              onClick={async () => {
+                const result = await showModal({ type: "prompt2", title: "새 학교 등록", message: "학교 이름과 관리자 비밀번호를 입력하세요.", placeholder: "학교 이름", placeholder2: "관리자 비밀번호" });
+                if (result) handleCreateSchool(result.val1, result.val2);
+              }}
+            >
+              ➕ 새 학교 등록
+            </button>
+          )}
+
           {/* 관리자 로그인 */}
           {!isAdmin && !showAdminLogin && (
             <button
@@ -1776,17 +1818,31 @@ export default function App() {
             </button>
           )}
 
-          {/* 학교 생성 (관리자 전용) */}
-          {isAdmin && (<button
-            className="setting-btn"
-            style={{ marginTop: "8px" }}
-            onClick={async () => {
-              const result = await showModal({ type: "prompt2", title: "새 학교 등록", message: "학교 이름과 관리자 비밀번호를 입력하세요.", placeholder: "학교 이름", placeholder2: "관리자 비밀번호" });
-              if (result) handleCreateSchool(result.val1, result.val2);
-            }}
-          >
-            ➕ 새 학교 등록
-          </button>)}
+          {/* 녹화 모드 (관리자 전용) */}
+          {isAdmin && (
+            <div className="setting-section" style={{ marginTop: "12px" }}>
+              <h3>🎬 AI 학습 녹화</h3>
+              <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 8 }}>동작별 학습 데이터를 녹화합니다</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => (
+                  <button
+                    key={id}
+                    className="setting-btn"
+                    onClick={() => {
+                      setCurrentMotion(parseInt(id));
+                      setSelectedStep(0);
+                      setActiveTab("practice");
+                      setPracticeMode("record");
+                      startCamera();
+                    }}
+                  >
+                    {m.icon} {m.name} 녹화
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
 
           {dataLoading && (
             <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px" }}>
@@ -2047,29 +2103,13 @@ export default function App() {
   return (
     <div className="app-frame">
       {/* 메인 콘텐츠 */}
-      {activeTab === "home" && renderHomeTab()}
-      {activeTab === "learn" && renderLearnTab()}
       {activeTab === "practice" && renderPracticeTab()}
-      {activeTab === "history" && renderHistoryTab()}
+      {activeTab === "learn" && renderLearnTab()}
       {activeTab === "settings" && renderSettingsTab()}
 
       {/* 하단 탭 바 */}
       {showTabBar && (
         <nav className="tab-bar">
-          <button
-            className={`tab-item ${activeTab === "home" ? "active" : ""}`}
-            onClick={() => setActiveTab("home")}
-          >
-            <img src="/icons/home.png" alt="홈" className="tab-icon" />
-            <span className="tab-label">홈</span>
-          </button>
-          <button
-            className={`tab-item ${activeTab === "learn" ? "active" : ""}`}
-            onClick={() => { setActiveTab("learn"); setLearnView(null); }}
-          >
-            <img src="/icons/learn.png" alt="학습" className="tab-icon" />
-            <span className="tab-label">학습</span>
-          </button>
           <button
             className={`tab-item ${activeTab === "practice" ? "active" : ""}`}
             onClick={() => { setActiveTab("practice"); setPracticeMode(null); setCurrentMotion(null); }}
@@ -2078,11 +2118,11 @@ export default function App() {
             <span className="tab-label">연습</span>
           </button>
           <button
-            className={`tab-item ${activeTab === "history" ? "active" : ""}`}
-            onClick={() => setActiveTab("history")}
+            className={`tab-item ${activeTab === "learn" ? "active" : ""}`}
+            onClick={() => { setActiveTab("learn"); setLearnView(null); }}
           >
-            <img src="/icons/history.png" alt="기록" className="tab-icon" />
-            <span className="tab-label">기록</span>
+            <img src="/icons/learn.png" alt="학습" className="tab-icon" />
+            <span className="tab-label">학습</span>
           </button>
           <button
             className={`tab-item ${activeTab === "settings" ? "active" : ""}`}
