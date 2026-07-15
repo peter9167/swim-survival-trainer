@@ -7,6 +7,11 @@ import { KNNClassifier } from "@/lib/knn";
 import { PracticeSession } from "@/lib/session";
 import { evaluatePose, FeedbackHistory } from "@/lib/feedback";
 import { StageSkeleton } from "@/lib/skeletonIcons";
+import { LEARN_CONTENT } from "@/lib/learn";
+import { ICONS, FontAwesomeIcon } from "@/lib/icons";
+import { OceanMap } from "@/components/OceanMap";
+import { LearnContent } from "@/components/LearnContent";
+import { Mascot, MascotBubble } from "@/components/Mascot";
 import {
   getSchools,
   createSchool,
@@ -22,48 +27,6 @@ const CONNECTIONS = [
   [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
   [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28],
 ];
-
-// 학습 콘텐츠 데이터
-const LEARN_CONTENT = {
-  intro: {
-    title: "생존수영이란",
-    icon: "📘",
-    content: `생존수영은 위급한 수상 상황에서 자신의 생명을 지키기 위한 기본적인 수영 기술입니다.
-
-물에 빠졌을 때 구조대가 올 때까지 체력을 보존하고, 침착하게 대응하는 방법을 배웁니다.
-
-2015년부터 초등학교 정규 교육과정에 포함되어 모든 학생들이 배우게 되었습니다.`,
-    points: [
-      "물에서 호흡 유지하기",
-      "체온 보존 자세 취하기",
-      "구조 신호 보내기",
-      "기본 영법으로 이동하기"
-    ]
-  },
-  safety: {
-    title: "물놀이 안전수칙",
-    icon: "⚠️",
-    content: `안전한 물놀이를 위해 반드시 지켜야 할 수칙들입니다.`,
-    points: [
-      "수영 전 충분한 준비운동 하기",
-      "보호자나 안전요원이 있는 곳에서만 수영하기",
-      "음식을 먹은 직후에는 수영하지 않기",
-      "수심을 확인하고 뛰어들지 않기",
-      "구명조끼 착용하기"
-    ]
-  },
-  cpr: {
-    title: "심폐소생술",
-    icon: "❤️",
-    content: `익수자를 구조한 후 의식이 없고 호흡이 없다면 즉시 심폐소생술을 시작해야 합니다.`,
-    points: [
-      "119에 신고하기",
-      "가슴 압박 30회 실시",
-      "인공호흡 2회 실시",
-      "구급대가 올 때까지 반복"
-    ]
-  }
-};
 
 export default function App() {
   // 탭 상태 (sessionStorage에서 복원)
@@ -138,6 +101,87 @@ export default function App() {
 
   // 자세 미리보기
   const [previewImage, setPreviewImage] = useState(null);
+
+  // ═══ UI 스케일 (대형 터치 모니터 대응) ═══
+  // null = 자동 감지 (JS로 뷰포트+DPR+터치 계산), 숫자 = 사용자 오버라이드
+  const [uiScale, setUiScale] = useState(() => {
+    if (typeof window === "undefined") return null;
+    const v = localStorage.getItem("swim_ui_scale");
+    return v ? parseFloat(v) : null;
+  });
+  const [autoScale, setAutoScale] = useState(1);
+
+  // 이 모니터에 맞춘 최적 스케일 자동 감지
+  // - 뷰포트 너비 (가장 강한 신호)
+  // - DPR (고DPI 화면에서 물리적 크기 보정)
+  // - 터치 여부 (터치 = 조작 여유 필요)
+  function detectScale() {
+    if (typeof window === "undefined") return 1;
+    const w = window.innerWidth;
+    const dpr = window.devicePixelRatio || 1;
+    const isTouch = window.matchMedia && (
+      window.matchMedia("(pointer: coarse)").matches ||
+      window.matchMedia("(hover: none)").matches
+    );
+
+    // 뷰포트 기반 기본 스케일
+    // 1024px → 1.0 / 1440px → 1.2 / 1920px → 1.45 / 2560px → 1.7 / 3840px → 1.85
+    let scale = 1 + Math.max(0, (w - 1024) / 3800);
+
+    // 고DPR 화면 보정 (같은 인치라도 CSS px는 작아 보임)
+    if (dpr >= 2) scale *= 1.05;
+    if (dpr >= 3) scale *= 1.05;
+
+    // 터치 기기는 +10% (손가락 조작 여유)
+    if (isTouch) scale *= 1.1;
+
+    // 상하한 클램프
+    return Math.max(0.9, Math.min(2.0, Math.round(scale * 100) / 100));
+  }
+
+  // 오버라이드 or 자동 감지 결과를 :root의 --fs-scale에 적용
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const applyScale = () => {
+      if (uiScale != null) {
+        document.documentElement.style.setProperty("--fs-scale", String(uiScale));
+      } else {
+        const s = detectScale();
+        setAutoScale(s);
+        document.documentElement.style.setProperty("--fs-scale", String(s));
+      }
+    };
+
+    applyScale();
+
+    // 사용자 오버라이드 저장 상태 동기화
+    if (uiScale == null) localStorage.removeItem("swim_ui_scale");
+    else localStorage.setItem("swim_ui_scale", String(uiScale));
+
+    // 창 크기 변경 시 자동 재감지 (오버라이드 없을 때만)
+    const onResize = () => {
+      if (uiScale == null) applyScale();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [uiScale]);
+
+  // 표시용 현재 배율
+  const effectiveScale = uiScale ?? autoScale;
+
+  // ± 조작 (0.1 스텝, 0.8~2.2 범위)
+  const bumpScale = (delta) => {
+    const base = uiScale ?? effectiveScale;
+    const next = Math.max(0.8, Math.min(2.2, Math.round((base + delta) * 100) / 100));
+    setUiScale(next);
+  };
+
+  // "이 모니터에 맞추기" — 자동 감지 결과를 저장 (오버라이드로 고정)
+  const fitToScreen = () => {
+    const s = detectScale();
+    setUiScale(s);
+  };
 
   // refs
   const videoRef = useRef(null);
@@ -791,111 +835,44 @@ export default function App() {
       return renderLearnDetail();
     }
 
+    // 완료 상태: localStorage에서 로드
+    const completed = new Set(
+      JSON.parse(typeof window !== "undefined" ? localStorage.getItem("swim_learn_done") || "[]" : "[]")
+    );
+
     return (
-      <div className="main-content">
-        <div className="page-header">
-          <h1>📖 학습</h1>
-          <p>생존수영의 기초부터 응급처치까지</p>
-        </div>
-
-        {/* 생존수영 소개 */}
-        <div className="motion-select">
-          <h2>생존수영 소개</h2>
-          <div className="motion-select-card" onClick={() => setLearnView("intro")}>
-            <div className="sel-icon">📘</div>
-            <div className="sel-info">
-              <h3>생존수영이란</h3>
-              <p>생존수영의 정의와 필요성</p>
-            </div>
-          </div>
-        </div>
-
-        {/* 생존뜨기 */}
-        <div className="motion-select">
-          <h2>생존뜨기</h2>
-          {[1, 2, 6].filter(id => !MOTIONS[id].hidden).map(id => {
-            const m = MOTIONS[id];
-            return (
-              <div key={id} className="motion-select-card" onClick={() => setLearnView(id)}>
-                <div className="sel-icon">{m.icon}</div>
-                <div className="sel-info">
-                  <h3>{m.name}</h3>
-                  <p>{m.sub}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* 생존수영 영법 */}
-        <div className="motion-select">
-          <h2>생존수영 영법</h2>
-          {[5, 4, 3].map(id => {
-            const m = MOTIONS[id];
-            return (
-              <div key={id} className="motion-select-card" onClick={() => setLearnView(id)}>
-                <div className="sel-icon">{m.icon}</div>
-                <div className="sel-info">
-                  <h3>{m.name}</h3>
-                  <p>{m.sub}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* 안전/응급 */}
-        <div className="motion-select">
-          <h2>수상안전 / 응급처치</h2>
-          <div className="motion-select-card" onClick={() => setLearnView("safety")}>
-            <div className="sel-icon">⚠️</div>
-            <div className="sel-info">
-              <h3>물놀이 안전수칙</h3>
-              <p>안전한 물놀이를 위한 수칙</p>
-            </div>
-          </div>
-          <div className="motion-select-card" onClick={() => setLearnView("cpr")}>
-            <div className="sel-icon">❤️</div>
-            <div className="sel-info">
-              <h3>심폐소생술</h3>
-              <p>익수자 구조 후 응급처치</p>
-            </div>
-            <span className="item-arrow">›</span>
-          </div>
-        </div>
+      <div className="main-content main-content-map">
+        <OceanMap
+          completed={completed}
+          onSelect={(item) => {
+            if (item.type === "motion") setLearnView(item.id);
+            else setLearnView(item.id);
+          }}
+        />
       </div>
     );
   }
 
+  // 콘텐츠 완료 마킹
+  function markLearnDone(key) {
+    if (typeof window === "undefined") return;
+    const set = new Set(JSON.parse(localStorage.getItem("swim_learn_done") || "[]"));
+    set.add(key);
+    localStorage.setItem("swim_learn_done", JSON.stringify([...set]));
+    forceUpdate(n => n + 1);
+  }
+
   // 학습 상세
   function renderLearnDetail() {
-    // 일반 콘텐츠
+    // 일반 콘텐츠 (intro/safety/cpr/이안류/저류/위험지형) — 새 컴포넌트
     if (typeof learnView === "string") {
-      const content = LEARN_CONTENT[learnView];
-      if (!content) return null;
-
       return (
-        <div className="main-content">
-          <div className="practice-header">
-            <button className="back-btn" onClick={() => setLearnView(null)}>←</button>
-            <h2>{content.title}</h2>
-          </div>
-          <div className="learn-detail">
-            <div className="detail-header">
-              <div className="detail-icon">{content.icon}</div>
-              <h2>{content.title}</h2>
-            </div>
-            <div className="detail-section">
-              <h3>개요</h3>
-              <p style={{ whiteSpace: "pre-line" }}>{content.content}</p>
-            </div>
-            <div className="detail-section">
-              <h3>핵심 포인트</h3>
-              <ul className="checklist">
-                {content.points.map((p, i) => <li key={i}>{p}</li>)}
-              </ul>
-            </div>
-          </div>
+        <div className="main-content main-content-detail">
+          <LearnContent
+            contentId={learnView}
+            onBack={() => setLearnView(null)}
+            onComplete={() => markLearnDone(`content-${learnView}`)}
+          />
         </div>
       );
     }
@@ -906,92 +883,120 @@ export default function App() {
 
     const detail = m.detailGuide;
 
+    const motionIcon = ICONS[`motion_${learnView}`] || ICONS.practice;
+
     return (
-      <div className="main-content">
-        <div className="practice-header">
-          <button className="back-btn" onClick={() => setLearnView(null)}>←</button>
-          <h2>{m.name}</h2>
-        </div>
-        <div className="learn-detail">
-          <div className="detail-header">
-            <div className="detail-icon">{m.icon}</div>
-            <h2>{m.name}</h2>
-            <p className="detail-sub">{m.sub}</p>
-          </div>
-
-          {/* 동작 이미지 */}
-          {m.learnImage && (
-            <div className="detail-section learn-image-section">
-              <img src={m.learnImage} alt={m.name} className="learn-image" />
+      <div className="main-content main-content-detail">
+        <div className="content-view">
+          {/* Header */}
+          <header className="content-header">
+            <button className="content-back" onClick={() => setLearnView(null)} aria-label="뒤로">
+              <FontAwesomeIcon icon={ICONS.back} />
+            </button>
+            <div className="content-header-icon">
+              <FontAwesomeIcon icon={motionIcon} />
             </div>
-          )}
+            <div className="content-header-text">
+              <div className="content-header-eyebrow">동작</div>
+              <h1 className="content-header-title">{m.name}</h1>
+            </div>
+          </header>
 
-          {/* 목적 설명 */}
-          <div className="detail-section">
-            <h3>왜 이 동작을 배우나요?</h3>
-            <p>{detail?.purpose || m.guide}</p>
-          </div>
+          <div className="content-body">
+            <MascotBubble mood="happy">
+              {`이 자세는 ${m.sub || m.name}(이)라고 해. 같이 배워보자!`}
+            </MascotBubble>
 
-          {/* 단계별 가이드 */}
-          {detail?.stepByStep && (
-            <div className="detail-section">
-              <h3>단계별 자세 가이드</h3>
-              <div className="step-guide">
-                {detail.stepByStep.map((item, i) => (
-                  <div key={i} className="step-guide-item">
-                    <div className="step-number">{i + 1}</div>
-                    <div className="step-content">
-                      <strong>{item.step}</strong>
-                      <p>{item.desc}</p>
-                    </div>
-                  </div>
-                ))}
+            {/* 동작 이미지 */}
+            {m.learnImage && (
+              <div className="content-image-card">
+                <img src={m.learnImage} alt={m.name} />
               </div>
-            </div>
-          )}
+            )}
 
-          {/* 핵심 포인트 */}
-          {detail?.keyPoints && (
-            <div className="detail-section">
-              <h3>핵심 체크포인트</h3>
-              <ul className="checklist success">
-                {detail.keyPoints.map((point, i) => (
-                  <li key={i}>{point}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+            {/* 목적 */}
+            <section className="content-section">
+              <h2 className="content-section-heading">왜 이 동작을 배우나요?</h2>
+              <p className="content-section-body">{detail?.purpose || m.guide}</p>
+            </section>
 
-          {/* 흔한 실수 */}
-          {detail?.commonMistakes && (
-            <div className="detail-section">
-              <h3>이런 실수를 피하세요</h3>
-              <ul className="checklist warning">
-                {detail.commonMistakes.map((mistake, i) => (
-                  <li key={i}>{mistake}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+            {/* 단계별 가이드 */}
+            {detail?.stepByStep && (
+              <section className="content-section">
+                <h2 className="content-section-heading">단계별 자세</h2>
+                <div className="steps-list">
+                  {detail.stepByStep.map((item, i) => (
+                    <div key={i} className="step-row">
+                      <div className="step-row-track">
+                        <div className="step-row-num">{i + 1}</div>
+                        {i < detail.stepByStep.length - 1 && <div className="step-row-line" />}
+                      </div>
+                      <div className="step-row-body">
+                        <div className="step-row-title">{item.step}</div>
+                        <div className="step-row-desc">{item.desc}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
-          {/* 수행 정보 */}
-          <div className="detail-section">
-            <h3>수행 정보</h3>
-            <div className="info-chips">
-              <span className="info-chip">{m.posture === "standing" ? "🧍 서서" : "🪑 앉아서"}</span>
-              <span className="info-chip">
-                {m.holdMode ? `⏱️ ${m.holdGoal}초 유지` : `🔄 ${m.targetCycles}회 반복`}
+            {/* 정보 chips */}
+            <div className="motion-chips">
+              <span className="motion-chip">
+                <FontAwesomeIcon icon={m.posture === "standing" ? ICONS.practice : ICONS.target} />
+                {m.posture === "standing" ? "서서" : "앉아서"}
+              </span>
+              <span className="motion-chip">
+                <FontAwesomeIcon icon={m.holdMode ? ICONS.star : ICONS.play} />
+                {m.holdMode ? `${m.holdGoal}초 유지` : `${m.targetCycles}회 반복`}
               </span>
             </div>
-          </div>
+
+            {/* 핵심 포인트 */}
+            {detail?.keyPoints && (
+              <div className="key-points-card">
+                <div className="key-points-head">
+                  <FontAwesomeIcon icon={ICONS.star} />
+                  <span>핵심 체크포인트</span>
+                </div>
+                <ul>
+                  {detail.keyPoints.map((point, i) => (
+                    <li key={i}>
+                      <FontAwesomeIcon icon={ICONS.check} />
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* 흔한 실수 */}
+            {detail?.commonMistakes && (
+              <div className="mistakes-card">
+                <div className="mistakes-head">
+                  <FontAwesomeIcon icon={ICONS.warn} />
+                  <span>이런 실수 피하기</span>
+                </div>
+                <ul>
+                  {detail.commonMistakes.map((mistake, i) => (
+                    <li key={i}>
+                      <FontAwesomeIcon icon={ICONS.close} />
+                      <span>{mistake}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
           <button
-            className="practice-btn"
+            className="content-practice-btn"
             onClick={() => {
               const motionId = learnView;
               const mot = MOTIONS[motionId];
               const clf = classifiersRef.current[motionId];
               const trained = (clf?.numClasses || 0) >= 2;
+              markLearnDone(`motion-${motionId}`);
               setLearnView(null);
               setActiveTab("practice");
               setHoldGoalInput(mot.holdGoal || 30);
@@ -999,9 +1004,11 @@ export default function App() {
               startPractice(motionId, trained ? "knn" : "instant");
             }}
           >
-            🏊 연습하러 가기
+            <FontAwesomeIcon icon={ICONS.play} />
+            <span>연습하러 가기</span>
           </button>
 
+          </div>
         </div>
       </div>
     );
@@ -1017,34 +1024,46 @@ export default function App() {
     // 기본 - 동작 선택
     return (
       <div className="main-content">
-        <div className="page-header">
-          <h1>🏊 연습</h1>
-          <p>동작을 선택하여 연습을 시작하세요</p>
+        <div className="practice-hero">
+          <div className="practice-hero-eyebrow">
+            <FontAwesomeIcon icon={ICONS.practice} />
+            <span>PRACTICE</span>
+          </div>
+          <h1 className="practice-hero-title">동작 연습</h1>
+          <p className="practice-hero-sub">카메라 앞에서 자세를 취하면 AI가 자동으로 채점해요</p>
         </div>
 
-        <div className="motion-select">
-          <h2>동작 선택</h2>
+        <div className="motion-grid">
           {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
             const clf = classifiersRef.current[id];
             const trained = (clf?.numClasses || 0) >= 2;
             const mode = trained ? "knn" : "instant";
+            const icon = ICONS[`motion_${id}`] || ICONS.practice;
 
             return (
-              <div
+              <button
                 key={id}
-                className="motion-select-card"
+                className="motion-card"
                 onClick={() => {
                   setHoldGoalInput(m.holdGoal || 30);
                   setCycleGoalInput(m.targetCycles || 5);
                   startPractice(parseInt(id), mode);
                 }}
               >
-                <div className="sel-icon">{m.icon}</div>
-                <div className="sel-info">
-                  <h3>{m.name}</h3>
-                  <p>{m.desc}</p>
+                <div className="motion-card-icon">
+                  <FontAwesomeIcon icon={icon} />
                 </div>
-              </div>
+                <div className="motion-card-body">
+                  <div className="motion-card-title">{m.name}</div>
+                  <div className="motion-card-desc">{m.desc}</div>
+                </div>
+                <div className={`motion-card-badge ${trained ? "badge-ai" : "badge-instant"}`}>
+                  {trained ? "AI" : "즉시"}
+                </div>
+                <div className="motion-card-arrow">
+                  <FontAwesomeIcon icon={ICONS.next} />
+                </div>
+              </button>
             );
           })}
         </div>
@@ -1062,28 +1081,33 @@ export default function App() {
 
     return (
       <div className="practice-view">
-        {/* 헤더 (모바일용) */}
-        <div className="practice-header mobile-only">
-          <button className="back-btn" onClick={exitPractice}>←</button>
-          <h2>{m.icon} {m.name}</h2>
+        {/* 헤더 (항상 표시) — 강사가 언제든 뒤로가기 */}
+        <div className="practice-header">
+          <button
+            className="back-btn back-btn-lg"
+            onClick={exitPractice}
+            aria-label="뒤로가기"
+          >
+            <FontAwesomeIcon icon={ICONS.back} />
+            <span className="back-btn-label">뒤로</span>
+          </button>
+          <div className="practice-header-title">
+            <FontAwesomeIcon icon={ICONS[`motion_${currentMotion}`] || ICONS.practice} className="ph-motion-icon" />
+            <h2>{m.name}</h2>
+          </div>
           <span className={`mode-badge ${isRecord ? "mode-record" : practiceMode === "knn" ? "mode-knn" : "mode-instant"}`}>
             {isRecord ? "녹화" : practiceMode === "knn" ? "AI" : "즉시"}
           </span>
         </div>
+
+        {/* 워크스페이스 (와이드에선 카메라+패널 가로배치) */}
+        <div className="practice-workspace">
 
         {/* 카메라 영역 */}
         <div
           className="camera-container"
           ref={cameraContainerRef}
         >
-          {/* PC용 오버레이 헤더 */}
-          <div className="camera-header pc-only">
-            <button className="back-btn" onClick={exitPractice}>← 돌아가기</button>
-            <h2>{m.icon} {m.name}</h2>
-            <span className={`mode-badge ${isRecord ? "mode-record" : practiceMode === "knn" ? "mode-knn" : "mode-instant"}`}>
-              {isRecord ? "녹화" : practiceMode === "knn" ? "AI" : "즉시"}
-            </span>
-          </div>
           {/* eslint-disable-next-line react/no-unknown-property */}
           <video
             ref={videoRef}
@@ -1301,13 +1325,14 @@ export default function App() {
         {!practiceComplete && isRecord && (
           <div className="practice-controls">
             <button className="ctrl-btn primary" onClick={recordSample}>
-              📷 녹화 (SPACE)
+              <FontAwesomeIcon icon={ICONS.camera} /> 녹화 (SPACE)
             </button>
             <button className="ctrl-btn secondary" onClick={isAdmin && selectedSchoolId ? saveRecordedSamples : exitPractice}>
-              {isAdmin && selectedSchoolId ? "💾 저장" : "완료"}
+              {isAdmin && selectedSchoolId ? "저장" : "완료"}
             </button>
           </div>
         )}
+        </div>
       </div>
     );
   }
@@ -1357,12 +1382,12 @@ export default function App() {
           단계별 10~15개 권장.
         </p>
         {isAdmin ? (
-          <p className="record-info" style={{ color: "var(--success)", marginTop: "8px" }}>
-            🔐 관리자 모드: 서버에 저장됩니다
+          <p className="record-info" style={{ color: "var(--success)", marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            <FontAwesomeIcon icon={ICONS.adminLogin} /> 관리자 모드: 서버에 저장됩니다
           </p>
         ) : (
-          <p className="record-info" style={{ color: "var(--text2)", marginTop: "8px" }}>
-            💾 로컬 저장 (이 기기에서만 사용)
+          <p className="record-info" style={{ color: "var(--text2)", marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            <FontAwesomeIcon icon={ICONS.info} /> 로컬 저장 (이 기기에서만 사용)
           </p>
         )}
       </div>
@@ -1493,7 +1518,12 @@ export default function App() {
                       size={36}
                     />
                   ) : (
-                    isLocked ? "🔒" : check.passed ? "✅" : isCurrentStage ? "👉" : "⚠️"
+                    <FontAwesomeIcon icon={
+                      isLocked ? ICONS.lock
+                        : check.passed ? ICONS.check
+                        : isCurrentStage ? ICONS.play
+                        : ICONS.warn
+                    } />
                   )}
                 </span>
                 <div className="check-text">
@@ -1694,9 +1724,13 @@ export default function App() {
   function renderSettingsTab() {
     return (
       <div className="main-content">
-        <div className="page-header">
-          <h1>⚙️ 설정</h1>
-          <p>앱 설정 및 데이터 관리</p>
+        <div className="practice-hero">
+          <div className="practice-hero-eyebrow">
+            <FontAwesomeIcon icon={ICONS.settings} />
+            <span>SETTINGS</span>
+          </div>
+          <h1 className="practice-hero-title">설정</h1>
+          <p className="practice-hero-sub">앱 설정 및 데이터 관리</p>
         </div>
 
         {/* 학교 설정 */}
@@ -1705,7 +1739,7 @@ export default function App() {
 
           {/* 현재 상태 */}
           <div className="setting-item">
-            <span className="setting-icon">🏫</span>
+            <span className="setting-icon"><FontAwesomeIcon icon={ICONS.school} /></span>
             <div className="setting-text">
               <h4>현재 학교</h4>
               <p>
@@ -1751,7 +1785,7 @@ export default function App() {
                 if (result) handleCreateSchool(result.val1, result.val2);
               }}
             >
-              ➕ 새 학교 등록
+              <FontAwesomeIcon icon={ICONS.add} /> 새 학교 등록
             </button>
           )}
 
@@ -1762,15 +1796,20 @@ export default function App() {
               style={{ marginTop: "12px" }}
               onClick={() => setShowAdminLogin(true)}
             >
-              🔐 관리자 로그인
+              <FontAwesomeIcon icon={ICONS.adminLogin} /> 관리자 로그인
             </button>
           )}
 
           {!isAdmin && showAdminLogin && (
             <div className="admin-login-box" style={{ marginTop: "12px" }}>
               <div className="admin-login-header">
-                <span>🔐 {selectedSchoolId ? (schools.find(s => s.id === selectedSchoolId)?.name || "학교") : "기본 (개발자)"} 관리자</span>
-                <button className="admin-login-close" onClick={() => { setShowAdminLogin(false); setAdminPassword(""); }}>✕</button>
+                <span>
+                  <FontAwesomeIcon icon={ICONS.adminLogin} />
+                  {" "}{selectedSchoolId ? (schools.find(s => s.id === selectedSchoolId)?.name || "학교") : "기본 (개발자)"} 관리자
+                </span>
+                <button className="admin-login-close" onClick={() => { setShowAdminLogin(false); setAdminPassword(""); }} aria-label="닫기">
+                  <FontAwesomeIcon icon={ICONS.close} />
+                </button>
               </div>
               <div className="admin-login-input-row">
                 <input
@@ -1814,14 +1853,16 @@ export default function App() {
                 showToast("관리자 로그아웃");
               }}
             >
-              🔓 관리자 로그아웃
+              <FontAwesomeIcon icon={ICONS.adminLogout} /> 관리자 로그아웃
             </button>
           )}
 
           {/* 녹화 모드 (관리자 전용) */}
           {isAdmin && (
             <div className="setting-section" style={{ marginTop: "12px" }}>
-              <h3>🎬 AI 학습 녹화</h3>
+              <h3>
+                <FontAwesomeIcon icon={ICONS.record} /> AI 학습 녹화
+              </h3>
               <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 8 }}>동작별 학습 데이터를 녹화합니다</p>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => (
@@ -1836,7 +1877,7 @@ export default function App() {
                       startCamera();
                     }}
                   >
-                    {m.icon} {m.name} 녹화
+                    <FontAwesomeIcon icon={ICONS[`motion_${id}`] || ICONS.record} /> {m.name} 녹화
                   </button>
                 ))}
               </div>
@@ -1845,8 +1886,8 @@ export default function App() {
 
 
           {dataLoading && (
-            <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px" }}>
-              ⏳ 학습 데이터 로딩 중...
+            <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "8px" }}>
+              <FontAwesomeIcon icon={ICONS.hourglass} /> 학습 데이터 로딩 중...
             </p>
           )}
         </div>
@@ -1855,7 +1896,7 @@ export default function App() {
         <div className="settings-section">
           <h3>카메라 설정</h3>
           <div className="setting-item">
-            <span className="setting-icon">📷</span>
+            <span className="setting-icon"><FontAwesomeIcon icon={ICONS.camera} /></span>
             <div className="setting-text">
               <h4>카메라 선택</h4>
               <p>사용할 카메라를 선택하세요</p>
@@ -1896,7 +1937,7 @@ export default function App() {
             style={{ marginTop: "12px" }}
             onClick={loadCameras}
           >
-            🔄 카메라 목록 새로고침
+            <FontAwesomeIcon icon={ICONS.refresh} /> 카메라 목록 새로고침
           </button>
         </div>
 
@@ -1911,7 +1952,7 @@ export default function App() {
             return (
               <div key={id} className="data-motion">
                 <div className="dm-header">
-                  <span className="dm-icon">{m.icon}</span>
+                  <span className="dm-icon"><FontAwesomeIcon icon={ICONS[`motion_${id}`] || ICONS.practice} /></span>
                   <span className="dm-name">{m.name}</span>
                   <span className="dm-total">{total}개</span>
                 </div>
@@ -1950,7 +1991,7 @@ export default function App() {
                       }
                     }}
                   >
-                    내보내기
+                    <FontAwesomeIcon icon={ICONS.exportFile} /> 내보내기
                   </button>
                   <button
                     disabled={dataLoading || total === 0}
@@ -1959,7 +2000,7 @@ export default function App() {
                       if (ok) handleUploadToSupabase(parseInt(id), false);
                     }}
                   >
-                    ☁️ 추가
+                    <FontAwesomeIcon icon={ICONS.upload} /> 추가
                   </button>
                   <button
                     disabled={dataLoading || total === 0}
@@ -1968,7 +2009,7 @@ export default function App() {
                       if (ok) handleUploadToSupabase(parseInt(id), true);
                     }}
                   >
-                    🔄 덮어쓰기
+                    <FontAwesomeIcon icon={ICONS.refresh} /> 덮어쓰기
                   </button>
                   <button
                     className="delete"
@@ -1982,7 +2023,7 @@ export default function App() {
                       }
                     }}
                   >
-                    삭제
+                    <FontAwesomeIcon icon={ICONS.trash} /> 삭제
                   </button>
                 </div>
               </div>
@@ -2000,7 +2041,9 @@ export default function App() {
             }}
             disabled={dataLoading}
           >
-            {dataLoading ? "⏳ 업로드 중..." : "☁️ 전체 추가 업로드"}
+            {dataLoading
+              ? <><FontAwesomeIcon icon={ICONS.hourglass} /> 업로드 중...</>
+              : <><FontAwesomeIcon icon={ICONS.upload} /> 전체 추가 업로드</>}
           </button>
           <button
             className="setting-btn"
@@ -2010,7 +2053,7 @@ export default function App() {
             }}
             disabled={dataLoading}
           >
-            🔄 전체 덮어쓰기
+            <FontAwesomeIcon icon={ICONS.refresh} /> 전체 덮어쓰기
           </button>
           <button
             className="setting-btn"
@@ -2031,7 +2074,7 @@ export default function App() {
               showToast("전체 백업 완료");
             }}
           >
-            📤 전체 내보내기
+            <FontAwesomeIcon icon={ICONS.exportFile} /> 전체 내보내기
           </button>
 
           <button
@@ -2068,7 +2111,7 @@ export default function App() {
               input.click();
             }}
           >
-            📥 가져오기
+            <FontAwesomeIcon icon={ICONS.importFile} /> 가져오기
           </button>
 
           <button
@@ -2086,7 +2129,7 @@ export default function App() {
               }
             }}
           >
-            🗑 전체 삭제
+            <FontAwesomeIcon icon={ICONS.trash} /> 전체 삭제
           </button>
         </div>)}
 
@@ -2102,37 +2145,77 @@ export default function App() {
 
   return (
     <div className="app-frame">
-      {/* 메인 콘텐츠 */}
-      {activeTab === "practice" && renderPracticeTab()}
-      {activeTab === "learn" && renderLearnTab()}
-      {activeTab === "settings" && renderSettingsTab()}
+      {/* 화면 크기 조절 툴바 (강사용, 상시 노출) */}
+      <div className="scale-toolbar" aria-label="화면 크기 조절">
+        <button
+          className="scale-btn"
+          onClick={() => bumpScale(-0.1)}
+          aria-label="글자 작게"
+          title="글자 작게"
+        >
+          A−
+        </button>
+        <button
+          className="scale-btn scale-btn-value"
+          onClick={() => setUiScale(null)}
+          aria-label="자동 크기로 되돌리기"
+          title="자동 감지 모드로 전환 (오버라이드 해제)"
+        >
+          {uiScale == null && <span className="scale-auto-dot" aria-hidden="true" />}
+          {Math.round(effectiveScale * 100)}%
+        </button>
+        <button
+          className="scale-btn"
+          onClick={() => bumpScale(0.1)}
+          aria-label="글자 크게"
+          title="글자 크게"
+        >
+          A+
+        </button>
+        <button
+          className="scale-btn scale-btn-fit"
+          onClick={fitToScreen}
+          aria-label="이 모니터에 맞추기"
+          title="이 모니터에 최적 크기로 맞추기 (뷰포트+DPR+터치 감지)"
+        >
+          ⤢
+        </button>
+      </div>
 
-      {/* 하단 탭 바 */}
-      {showTabBar && (
-        <nav className="tab-bar">
-          <button
-            className={`tab-item ${activeTab === "practice" ? "active" : ""}`}
-            onClick={() => { setActiveTab("practice"); setPracticeMode(null); setCurrentMotion(null); }}
-          >
-            <img src="/icons/practice.png" alt="연습" className="tab-icon" />
-            <span className="tab-label">연습</span>
-          </button>
-          <button
-            className={`tab-item ${activeTab === "learn" ? "active" : ""}`}
-            onClick={() => { setActiveTab("learn"); setLearnView(null); }}
-          >
-            <img src="/icons/learn.png" alt="학습" className="tab-icon" />
-            <span className="tab-label">학습</span>
-          </button>
-          <button
-            className={`tab-item ${activeTab === "settings" ? "active" : ""}`}
-            onClick={() => setActiveTab("settings")}
-          >
-            <img src="/icons/setting.png" alt="설정" className="tab-icon" />
-            <span className="tab-label">설정</span>
-          </button>
-        </nav>
-      )}
+      {/* 셸: 사이드바(대형) 또는 하단 탭바(모바일) + 메인 */}
+      <div className={`app-shell ${!showTabBar ? "app-shell-fullscreen" : ""}`}>
+        {showTabBar && (
+          <nav className="app-nav" aria-label="주 메뉴">
+            <button
+              className={`nav-item ${activeTab === "practice" ? "active" : ""}`}
+              onClick={() => { setActiveTab("practice"); setPracticeMode(null); setCurrentMotion(null); }}
+            >
+              <FontAwesomeIcon icon={ICONS.practice} className="nav-icon" />
+              <span className="nav-label">연습</span>
+            </button>
+            <button
+              className={`nav-item ${activeTab === "learn" ? "active" : ""}`}
+              onClick={() => { setActiveTab("learn"); setLearnView(null); }}
+            >
+              <FontAwesomeIcon icon={ICONS.learn} className="nav-icon" />
+              <span className="nav-label">학습</span>
+            </button>
+            <button
+              className={`nav-item ${activeTab === "settings" ? "active" : ""}`}
+              onClick={() => setActiveTab("settings")}
+            >
+              <FontAwesomeIcon icon={ICONS.settings} className="nav-icon" />
+              <span className="nav-label">설정</span>
+            </button>
+          </nav>
+        )}
+
+        <main className="app-main">
+          {activeTab === "practice" && renderPracticeTab()}
+          {activeTab === "learn" && renderLearnTab()}
+          {activeTab === "settings" && renderSettingsTab()}
+        </main>
+      </div>
 
       {/* 로딩 오버레이 */}
       {dataLoading && loadingMsg && (
@@ -2195,7 +2278,9 @@ export default function App() {
       {previewImage && (
         <div className="preview-overlay" onClick={() => setPreviewImage(null)}>
           <img src={previewImage} alt="자세 미리보기" />
-          <button className="preview-close" onClick={() => setPreviewImage(null)}>✕</button>
+          <button className="preview-close" onClick={() => setPreviewImage(null)} aria-label="닫기">
+            <FontAwesomeIcon icon={ICONS.close} />
+          </button>
         </div>
       )}
 
