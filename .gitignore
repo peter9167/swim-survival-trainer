@@ -3,3 +3,8 @@ node_modules/
 out/
 .env
 .env.local
+
+# 과학전람회 제출 문서 (로컬 보관용, 공개 저장소에 올리지 않음)
+*.pdf
+작품제작계획서.txt
+연구보고서_*.md

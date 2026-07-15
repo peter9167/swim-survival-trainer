@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>단계별 스켈레톤 가이드 오버레이 — 데모</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0b1426;
+    --panel: #111c33;
+    --card: #1a263f;
+    --accent: #38bdf8;
+    --accent2: #0ea5e9;
+    --success: #34d399;
+    --text: #f1f5f9;
+    --text2: #a3b3c9;
+    --border: #243049;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Noto Sans KR", -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: -0.01em;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 0%, rgba(56,189,248,0.08), transparent 50%),
+      radial-gradient(ellipse 60% 50% at 80% 100%, rgba(14,165,233,0.06), transparent 50%);
+    pointer-events: none;
+  }
+
+  .app {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
+    padding: 14px 20px;
+    background: rgba(17, 28, 51, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    z-index: 50;
+  }
+
+  .header h1 {
+    font-size: 17px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #38bdf8, #06b6d4);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .header .desc {
+    font-size: 12px;
+    color: var(--text2);
+    flex: 1;
+  }
+
+  .motion-select {
+    display: flex;
+    gap: 8px;
+  }
+
+  .motion-btn {
+    padding: 8px 14px;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .motion-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .motion-btn.active {
+    background: linear-gradient(135deg, #38bdf8, #06b6d4);
+    color: #062336;
+    border-color: transparent;
+    box-shadow: 0 4px 14px rgba(56,189,248,0.35);
+  }
+
+  .stage {
+    position: relative;
+    flex: 1;
+    background: #000;
+    overflow: hidden;
+  }
+
+  /* 카메라 + 캔버스 */
+  #video, #poseCanvas {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    transform: translate(-50%, -50%) scaleX(-1);
+  }
+
+  #poseCanvas { pointer-events: none; }
+
+  /* 상단 단계 진행 */
+  .stage-progress-panel {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 12px 16px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    max-width: 520px;
+  }
+
+  .stage-progress-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .stage-dot {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.15);
+    transition: all 0.3s;
+  }
+
+  .stage-dot.completed {
+    background: var(--success);
+  }
+
+  .stage-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(56,189,248,0.6);
+    animation: pulse 1.4s ease infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(56,189,248,0.4); }
+    50% { box-shadow: 0 0 16px rgba(56,189,248,0.8); }
+  }
+
+  .stage-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .stage-counter {
+    font-size: 11px;
+    color: var(--text2);
+    font-weight: 600;
+    margin-top: 2px;
+  }
+
+  /* 좌측 체크리스트 */
+  .checklist {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 280px;
+  }
+
+  .check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid var(--border);
+    border-radius: 8px;
+    transition: all 0.3s;
+  }
+
+  .check-item.current {
+    border-left-color: var(--accent);
+    background: rgba(56,189,248,0.15);
+    transform: translateX(4px);
+  }
+
+  .check-item.completed {
+    border-left-color: var(--success);
+    background: rgba(52,211,153,0.12);
+  }
+
+  .check-item.locked {
+    opacity: 0.4;
+  }
+
+  .check-icon {
+    font-size: 16px;
+    width: 22px;
+    text-align: center;
+  }
+
+  .check-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  /* ⭐ 핵심: 우하단 단계별 가이드 스켈레톤 오버레이 ⭐ */
+  .skeleton-guide-overlay {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 12px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(56,189,248,0.3);
+    border-radius: 16px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.4), 0 0 0 1px rgba(56,189,248,0.1);
+    pointer-events: none;
+    animation: slideIn 0.4s ease;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .skeleton-guide-overlay svg {
+    filter: drop-shadow(0 0 10px rgba(56,189,248,0.5));
+  }
+
+  .skeleton-guide-label {
+    font-size: 12px;
+    color: rgba(255,255,255,0.9);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .skeleton-guide-header {
+    font-size: 10px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* 카메라 상태 */
+  .camera-status {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .camera-status .dot {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--success);
+  }
+
+  .camera-status.off .dot {
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444;
+  }
+
+  /* 시작 안내 */
+  .start-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+  }
+
+  .start-overlay h2 {
+    font-size: 22px;
+    font-weight: 800;
+  }
+
+  .start-overlay p {
+    color: var(--text2);
+    text-align: center;
+    max-width: 420px;
+    line-height: 1.6;
+    font-size: 14px;
+  }
+
+  .start-btn {
+    padding: 14px 28px;
+    background: linear-gradient(135deg, #38bdf8, #06b6d4);
+    color: #062336;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(56,189,248,0.4);
+    transition: transform 0.15s;
+  }
+
+  .start-btn:hover { transform: translateY(-2px); }
+  .start-btn:active { transform: translateY(0) scale(0.98); }
+
+  .auto-toggle {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    gap: 6px;
+    padding: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+  }
+
+  .auto-toggle button {
+    padding: 6px 14px;
+    background: transparent;
+    color: var(--text2);
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .auto-toggle button.active {
+    background: var(--accent);
+    color: #062336;
+  }
+
+  .footer-info {
+    position: absolute;
+    top: 56px;
+    right: 16px;
+    z-index: 5;
+    font-size: 10px;
+    color: var(--text2);
+    text-align: right;
+    line-height: 1.5;
+    max-width: 200px;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="header">
+    <h1>🏊 단계별 가이드 스켈레톤 오버레이</h1>
+    <div class="desc">우하단의 가이드 아이콘이 각 단계의 목표 자세를 시각화합니다.</div>
+    <div class="motion-select" id="motionSelect">
+      <button class="motion-btn active" data-motion="1">🔥 HELP 자세</button>
+      <button class="motion-btn" data-motion="2">🦐 새우등뜨기</button>
+      <button class="motion-btn" data-motion="6">🌊 누워뜨기</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="poseCanvas"></canvas>
+
+    <div class="camera-status off" id="cameraStatus">
+      <span class="dot"></span>
+      <span id="statusText">카메라 대기</span>
+    </div>
+
+    <div class="footer-info" id="footerInfo">FPS: 0 · 랜드마크: 0</div>
+
+    <!-- 상단 단계 진행 -->
+    <div class="stage-progress-panel">
+      <div class="stage-progress-bar" id="stageBar"></div>
+      <div class="stage-label" id="stageLabel">단계 1: 팔을 가슴 앞에서 교차하세요</div>
+      <div class="stage-counter" id="stageCounter">STAGE 1 / 3</div>
+    </div>
+
+    <!-- 좌하단 체크리스트 -->
+    <div class="checklist" id="checklist"></div>
+
+    <!-- ⭐ 우하단 단계별 가이드 스켈레톤 오버레이 ⭐ -->
+    <div class="skeleton-guide-overlay" id="guideOverlay">
+      <div class="skeleton-guide-header">목표 자세</div>
+      <div id="guideSvgWrap"></div>
+      <div class="skeleton-guide-label" id="guideLabel">팔 교차</div>
+    </div>
+
+    <!-- 자동/수동 토글 -->
+    <div class="auto-toggle">
+      <button class="active" data-mode="auto">⏯ 자동 순환</button>
+      <button data-mode="manual">⏸ 수동 (클릭으로 진행)</button>
+    </div>
+
+    <!-- 시작 오버레이 -->
+    <div class="start-overlay" id="startOverlay">
+      <h2>📷 데모 시작</h2>
+      <p>웹캠을 켜고 MediaPipe로 골격을 추적합니다.<br/>
+      카메라 없이도 우하단의 단계별 가이드 스켈레톤이 자동으로 순환되는 모습을 확인할 수 있습니다.</p>
+      <div style="display:flex; gap:10px;">
+        <button class="start-btn" id="startWithCamera">웹캠 켜고 시작</button>
+        <button class="start-btn" id="startWithoutCamera" style="background:#243049; color:var(--text); box-shadow:none;">카메라 없이 보기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  // ═══════════════════════════════════════════════════════════
+  // POSES: 단계별 스켈레톤 좌표 (lib/skeletonIcons.jsx 그대로 이식)
+  // ═══════════════════════════════════════════════════════════
+  const POSES = {
+    "1-0": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[15,14], elbowR:[21,14], wristL:[23,12], wristR:[13,12], hipL:[14,20], hipR:[22,20], kneeL:[13,26], kneeR:[23,26], ankleL:[13,32], ankleR:[23,32], highlight:["armL","armR"] },
+    "1-1": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[14,13], elbowR:[22,13], wristL:[21,11], wristR:[15,11], hipL:[14,20], hipR:[22,20], kneeL:[13,26], kneeR:[23,26], ankleL:[13,32], ankleR:[23,32], highlight:["elbowL","elbowR"] },
+    "1-2": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[14,13], elbowR:[22,13], wristL:[21,11], wristR:[15,11], hipL:[14,20], hipR:[22,20], kneeL:[13,16], kneeR:[23,16], ankleL:[15,22], ankleR:[21,22], highlight:["legL","legR"] },
+    "2-0": { head:[27,12], neck:[25,11], shoulderL:[22,9], shoulderR:[28,9], elbowL:[20,14], elbowR:[27,14], wristL:[19,18], wristR:[26,18], hipL:[14,20], hipR:[22,20], kneeL:[12,26], kneeR:[22,26], ankleL:[12,32], ankleR:[22,32], highlight:["torso"] },
+    "2-1": { head:[28,15], neck:[26,12], shoulderL:[22,9], shoulderR:[28,9], elbowL:[20,14], elbowR:[27,14], wristL:[19,18], wristR:[26,18], hipL:[14,20], hipR:[22,20], kneeL:[12,26], kneeR:[22,26], ankleL:[12,32], ankleR:[22,32], highlight:["head"] },
+    "2-2": { head:[28,15], neck:[26,12], shoulderL:[22,9], shoulderR:[28,9], elbowL:[18,16], elbowR:[24,16], wristL:[14,22], wristR:[22,22], hipL:[14,20], hipR:[22,20], kneeL:[12,26], kneeR:[22,26], ankleL:[12,32], ankleR:[22,32], highlight:["armL","armR"] },
+    "6-0": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[7,10], elbowR:[29,10], wristL:[2,10], wristR:[34,10], hipL:[14,22], hipR:[22,22], kneeL:[14,28], kneeR:[22,28], ankleL:[14,34], ankleR:[22,34], highlight:["armL","armR"] },
+    "6-1": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[7,10], elbowR:[29,10], wristL:[2,10], wristR:[34,10], hipL:[14,22], hipR:[22,22], kneeL:[14,28], kneeR:[22,28], ankleL:[14,34], ankleR:[22,34], highlight:["shoulderLine"], refLine:{y:10, dash:true} },
+    "6-2": { head:[18,4], neck:[18,8], shoulderL:[12,10], shoulderR:[24,10], elbowL:[7,10], elbowR:[29,10], wristL:[2,10], wristR:[34,10], hipL:[14,22], hipR:[22,22], kneeL:[14,28], kneeR:[22,28], ankleL:[14,34], ankleR:[22,34], highlight:["elbowL","elbowR"] },
+  };
+
+  // 동작별 단계 라벨 (motions.js의 holdStages 발췌)
+  const MOTIONS = {
+    1: {
+      name: "HELP 자세",
+      stages: [
+        { label: "팔을 가슴 앞에서 교차하세요", short: "팔 교차" },
+        { label: "팔꿈치를 접어 밀착하세요",   short: "팔꿈치 접기" },
+        { label: "무릎을 가슴 쪽으로 올리세요", short: "무릎 올리기" },
+      ],
+    },
+    2: {
+      name: "새우등뜨기",
+      stages: [
+        { label: "상체를 앞으로 숙이세요",     short: "상체 숙이기" },
+        { label: "머리를 아래로 숙이세요",     short: "머리 숙이기" },
+        { label: "양손으로 무릎을 감싸세요",   short: "무릎 감싸기" },
+      ],
+    },
+    6: {
+      name: "누워뜨기",
+      stages: [
+        { label: "양 팔을 옆으로 벌리세요",    short: "팔 벌리기" },
+        { label: "팔을 어깨 높이로 맞추세요",  short: "팔 높이" },
+        { label: "팔꿈치를 쭉 펴세요",         short: "팔꿈치 펴기" },
+      ],
+    },
+  };
+
+  // ═══════════════════════════════════════════════════════════
+  // SVG 렌더링 (skeletonIcons.jsx의 StageSkeleton를 vanilla JS로 재구성)
+  // ═══════════════════════════════════════════════════════════
+  function renderSkeleton(motionId, stageIndex, size = 110) {
+    const pose = POSES[`${motionId}-${stageIndex}`];
+    if (!pose) return "";
+
+    const hl = "#38bdf8";   // 강조 색
+    const dim = "#cbd5e1";  // 일반 색
+    const isHL = (name) => pose.highlight.includes(name);
+
+    const armL = isHL("armL"), armR = isHL("armR");
+    const legL = isHL("legL"), legR = isHL("legR");
+    const torso = isHL("torso"), head = isHL("head");
+    const elbowL = isHL("elbowL"), elbowR = isHL("elbowR");
+    const shoulderLine = isHL("shoulderLine");
+
+    const ln = (x1,y1,x2,y2,c,w=2) =>
+      `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"/>`;
+
+    let svg = `<svg width="${size}" height="${size}" viewBox="0 0 36 36" fill="none">`;
+
+    // 기준선 (누워뜨기 stage 1의 어깨 높이 점선)
+    if (pose.refLine) {
+      svg += `<line x1="1" y1="${pose.refLine.y}" x2="35" y2="${pose.refLine.y}" stroke="${hl}" stroke-width="1" stroke-dasharray="${pose.refLine.dash ? '2 2' : 'none'}" opacity="0.6"/>`;
+    }
+
+    // 머리
+    svg += `<circle cx="${pose.head[0]}" cy="${pose.head[1]}" r="3" stroke="${head ? hl : dim}" stroke-width="${head ? 2 : 1.5}" fill="none"/>`;
+
+    // 목
+    svg += ln(pose.neck[0], pose.neck[1], pose.head[0], pose.head[1]+3, torso ? hl : dim);
+
+    // 어깨선
+    svg += ln(pose.shoulderL[0], pose.shoulderL[1], pose.shoulderR[0], pose.shoulderR[1], shoulderLine ? hl : dim, shoulderLine ? 2.5 : 2);
+
+    // 몸통
+    const hipMidX = (pose.hipL[0]+pose.hipR[0])/2;
+    const hipMidY = (pose.hipL[1]+pose.hipR[1])/2;
+    svg += ln(pose.neck[0], pose.neck[1], hipMidX, hipMidY, torso ? hl : dim, torso ? 2.5 : 2);
+
+    // 엉덩이선
+    svg += ln(pose.hipL[0], pose.hipL[1], pose.hipR[0], pose.hipR[1], dim);
+
+    // 왼팔
+    svg += ln(pose.shoulderL[0], pose.shoulderL[1], pose.elbowL[0], pose.elbowL[1], (armL||elbowL) ? hl : dim, armL ? 2.5 : 2);
+    svg += ln(pose.elbowL[0], pose.elbowL[1], pose.wristL[0], pose.wristL[1], (armL||elbowL) ? hl : dim, armL ? 2.5 : 2);
+
+    // 오른팔
+    svg += ln(pose.shoulderR[0], pose.shoulderR[1], pose.elbowR[0], pose.elbowR[1], (armR||elbowR) ? hl : dim, armR ? 2.5 : 2);
+    svg += ln(pose.elbowR[0], pose.elbowR[1], pose.wristR[0], pose.wristR[1], (armR||elbowR) ? hl : dim, armR ? 2.5 : 2);
+
+    // 팔꿈치 강조 점
+    if (elbowL) svg += `<circle cx="${pose.elbowL[0]}" cy="${pose.elbowL[1]}" r="2" fill="${hl}"/>`;
+    if (elbowR) svg += `<circle cx="${pose.elbowR[0]}" cy="${pose.elbowR[1]}" r="2" fill="${hl}"/>`;
+
+    // 왼다리
+    svg += ln(pose.hipL[0], pose.hipL[1], pose.kneeL[0], pose.kneeL[1], legL ? hl : dim, legL ? 2.5 : 2);
+    svg += ln(pose.kneeL[0], pose.kneeL[1], pose.ankleL[0], pose.ankleL[1], legL ? hl : dim, legL ? 2.5 : 2);
+
+    // 오른다리
+    svg += ln(pose.hipR[0], pose.hipR[1], pose.kneeR[0], pose.kneeR[1], legR ? hl : dim, legR ? 2.5 : 2);
+    svg += ln(pose.kneeR[0], pose.kneeR[1], pose.ankleR[0], pose.ankleR[1], legR ? hl : dim, legR ? 2.5 : 2);
+
+    // 손목 끝점 강조 (팔 강조 시)
+    if (armL || armR) {
+      svg += `<circle cx="${pose.wristL[0]}" cy="${pose.wristL[1]}" r="1.5" fill="${hl}"/>`;
+      svg += `<circle cx="${pose.wristR[0]}" cy="${pose.wristR[1]}" r="1.5" fill="${hl}"/>`;
+    }
+
+    svg += `</svg>`;
+    return svg;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 상태 + UI 업데이트
+  // ═══════════════════════════════════════════════════════════
+  let currentMotion = 1;
+  let currentStage = 0;
+  let autoMode = true;
+  let autoTimer = null;
+
+  const stageBarEl = document.getElementById("stageBar");
+  const stageLabelEl = document.getElementById("stageLabel");
+  const stageCounterEl = document.getElementById("stageCounter");
+  const checklistEl = document.getElementById("checklist");
+  const guideSvgWrap = document.getElementById("guideSvgWrap");
+  const guideLabelEl = document.getElementById("guideLabel");
+
+  function renderUI() {
+    const m = MOTIONS[currentMotion];
+    const total = m.stages.length;
+
+    // 진행바
+    stageBarEl.innerHTML = m.stages.map((_, i) => {
+      let cls = "stage-dot";
+      if (i < currentStage) cls += " completed";
+      else if (i === currentStage) cls += " active";
+      return `<div class="${cls}"></div>`;
+    }).join("");
+
+    // 라벨
+    const stage = m.stages[currentStage];
+    stageLabelEl.textContent = `단계 ${currentStage + 1}: ${stage.label}`;
+    stageCounterEl.textContent = `STAGE ${currentStage + 1} / ${total}`;
+
+    // 체크리스트
+    checklistEl.innerHTML = m.stages.map((s, i) => {
+      let cls = "check-item";
+      let icon = "○";
+      if (i < currentStage) { cls += " completed"; icon = "✓"; }
+      else if (i === currentStage) { cls += " current"; icon = "▶"; }
+      else { cls += " locked"; icon = "🔒"; }
+      return `<div class="${cls}"><span class="check-icon">${icon}</span><span class="check-text">${s.short}</span></div>`;
+    }).join("");
+
+    // 가이드 스켈레톤
+    guideSvgWrap.innerHTML = renderSkeleton(currentMotion, currentStage, 110);
+    guideLabelEl.textContent = stage.short;
+  }
+
+  function nextStage() {
+    const total = MOTIONS[currentMotion].stages.length;
+    currentStage = (currentStage + 1) % total;
+    renderUI();
+  }
+
+  function startAutoCycle() {
+    stopAutoCycle();
+    autoTimer = setInterval(nextStage, 2500);
+  }
+
+  function stopAutoCycle() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  }
+
+  // 동작 선택 버튼
+  document.querySelectorAll(".motion-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".motion-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentMotion = parseInt(btn.dataset.motion);
+      currentStage = 0;
+      renderUI();
+      if (autoMode) startAutoCycle();
+    });
+  });
+
+  // 자동/수동 토글
+  document.querySelectorAll(".auto-toggle button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".auto-toggle button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      autoMode = btn.dataset.mode === "auto";
+      if (autoMode) startAutoCycle();
+      else stopAutoCycle();
+    });
+  });
+
+  // 수동 모드 시 카메라 영역 클릭으로 진행
+  document.querySelector(".stage").addEventListener("click", (e) => {
+    if (e.target.closest(".start-overlay")) return;
+    if (e.target.closest(".motion-btn")) return;
+    if (e.target.closest(".auto-toggle")) return;
+    if (!autoMode) nextStage();
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // MediaPipe 골격 추적
+  // ═══════════════════════════════════════════════════════════
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("poseCanvas");
+  const ctx = canvas.getContext("2d");
+  const statusEl = document.getElementById("cameraStatus");
+  const statusText = document.getElementById("statusText");
+  const footerInfo = document.getElementById("footerInfo");
+
+  const CONNECTIONS = [
+    [11,12],[11,13],[13,15],[12,14],[14,16],
+    [11,23],[12,24],[23,24],
+    [23,25],[25,27],[24,26],[26,28],
+  ];
+
+  let landmarker = null;
+  let lastTimestamp = 0;
+  let frameCount = 0;
+  let fpsTime = performance.now();
+  let fps = 0;
+
+  async function setupMediaPipe() {
+    statusText.textContent = "MediaPipe 로딩중...";
+    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+    const { PoseLandmarker, FilesetResolver } = vision;
+    const fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    landmarker = await PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numPoses: 1,
+    });
+    statusText.textContent = "모델 준비 완료";
+  }
+
+  async function startCamera() {
+    try {
+      statusText.textContent = "카메라 요청중...";
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      video.srcObject = stream;
+      await video.play();
+      statusEl.classList.remove("off");
+      statusText.textContent = "카메라 활성";
+      requestAnimationFrame(loop);
+    } catch (err) {
+      console.error(err);
+      statusText.textContent = "카메라 거부됨 / 사용 불가";
+    }
+  }
+
+  function loop(timestamp) {
+    requestAnimationFrame(loop);
+    if (!landmarker || video.readyState < 2) return;
+
+    if (timestamp === lastTimestamp) return;
+    lastTimestamp = timestamp;
+
+    // 캔버스 크기 = 비디오 표시 크기
+    const rect = video.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+
+    const result = landmarker.detectForVideo(video, timestamp);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (result.landmarks && result.landmarks.length > 0) {
+      drawSkeleton(result.landmarks[0]);
+      footerInfo.textContent = `FPS: ${fps} · 랜드마크: ${result.landmarks[0].length}`;
+    } else {
+      footerInfo.textContent = `FPS: ${fps} · 랜드마크: 0`;
+    }
+
+    // FPS 계산
+    frameCount++;
+    const now = performance.now();
+    if (now - fpsTime > 1000) {
+      fps = Math.round((frameCount * 1000) / (now - fpsTime));
+      frameCount = 0;
+      fpsTime = now;
+    }
+  }
+
+  function drawSkeleton(landmarks) {
+    // 캔버스와 비디오 둘 다 CSS scaleX(-1)이 적용되어 있으므로
+    // landmark.x를 추가 반전 없이 그대로 사용 (1-x 안 함).
+    // object-fit: contain 으로 인한 letterbox/pillarbox 보정 필요.
+    const w = canvas.width, h = canvas.height;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    const containerAspect = w / h;
+    const videoAspect = vw / vh;
+    let dispW, dispH, offX, offY;
+    if (videoAspect > containerAspect) {
+      // 비디오가 더 넓음 → 위/아래에 검은 띠 (letterbox)
+      dispW = w;
+      dispH = w / videoAspect;
+      offX = 0;
+      offY = (h - dispH) / 2;
+    } else {
+      // 비디오가 더 좁음 → 좌/우에 검은 띠 (pillarbox)
+      dispH = h;
+      dispW = h * videoAspect;
+      offX = (w - dispW) / 2;
+      offY = 0;
+    }
+
+    const mapX = (x) => x * dispW + offX;
+    const mapY = (y) => y * dispH + offY;
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#38bdf8";
+    ctx.shadowColor = "rgba(56,189,248,0.6)";
+    ctx.shadowBlur = 8;
+
+    for (const [a, b] of CONNECTIONS) {
+      const la = landmarks[a], lb = landmarks[b];
+      if (!la || !lb) continue;
+      ctx.beginPath();
+      ctx.moveTo(mapX(la.x), mapY(la.y));
+      ctx.lineTo(mapX(lb.x), mapY(lb.y));
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    for (const lm of landmarks) {
+      ctx.beginPath();
+      ctx.arc(mapX(lm.x), mapY(lm.y), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 시작 버튼
+  document.getElementById("startWithCamera").addEventListener("click", async () => {
+    document.getElementById("startOverlay").style.display = "none";
+    renderUI();
+    startAutoCycle();
+    await setupMediaPipe();
+    await startCamera();
+  });
+
+  document.getElementById("startWithoutCamera").addEventListener("click", () => {
+    document.getElementById("startOverlay").style.display = "none";
+    statusText.textContent = "카메라 없이 데모 중";
+    renderUI();
+    startAutoCycle();
+  });
+
+  // 초기 렌더 (시작 전에도 가이드 보이도록)
+  renderUI();
+</script>
+
+</body>
+</html>

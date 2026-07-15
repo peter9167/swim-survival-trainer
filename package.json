@@ -8,6 +8,9 @@
     "start": "next start"
   },
   "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^7.3.0",
+    "@fortawesome/free-solid-svg-icons": "^7.3.0",
+    "@fortawesome/react-fontawesome": "^3.4.0",
     "@mediapipe/tasks-vision": "^0.10.14",
     "@supabase/supabase-js": "^2.98.0",
     "next": "^14.2.0",
