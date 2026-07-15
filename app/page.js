@@ -5,15 +5,18 @@ const App = dynamic(() => import("@/components/App"), {
   loading: () => (
     <div
       style={{
+        position: "fixed",
+        inset: 0,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        height: "100vh",
         background: "#0a0e17",
         color: "#22d3ee",
         fontFamily: "'Pretendard', sans-serif",
         flexDirection: "column",
         gap: 20,
+        zIndex: 9999,
+        margin: 0,
       }}
     >
       {/* 파돌이 마스코트 SVG (Mascot.jsx의 축약본) */}

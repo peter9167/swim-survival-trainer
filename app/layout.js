@@ -28,6 +28,19 @@ export default function RootLayout({ children }) {
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Critical inline reset — globals.css 로드 전 FOUC(흰 배경 깜빡임) 방지 */}
+        <style>{`
+          html, body {
+            margin: 0;
+            padding: 0;
+            background: #0a0e17;
+            color: #f1f5f9;
+            width: 100%;
+            min-height: 100vh;
+            min-height: 100dvh;
+          }
+          body { overflow-x: hidden; }
+        `}</style>
       </head>
       <body>{children}</body>
     </html>

@@ -8,3 +8,7 @@ out/
 *.pdf
 작품제작계획서.txt
 연구보고서_*.md
+
+# 관리자 자격증명 (평문 저장, 절대 커밋 금지)
+ROOT_CREDENTIALS.md
+ROOT_CREDENTIALS.*.md

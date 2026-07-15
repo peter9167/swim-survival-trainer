@@ -19,6 +19,15 @@ import {
   saveTrainingData,
   deleteTrainingData,
   deleteAllTrainingDataBySchool,
+  loginAdmin,
+  unifiedLogin,
+  listAdmins,
+  createSubAdmin,
+  deleteAdmin,
+  updateAdminPassword,
+  listSchoolsWithSecrets,
+  deleteSchool,
+  updateSchoolPassword,
   DEFAULT_SCHOOL_ID,
 } from "@/lib/supabase";
 
@@ -83,11 +92,216 @@ export default function App() {
     }
     return "";
   });
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false); // 학교 관리자 여부 (레거시)
   const [dataLoading, setDataLoading] = useState(true);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
+
+  // ═══ 시스템 관리자 (root / sub) ═══
+  const [currentAdmin, setCurrentAdmin] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const saved = sessionStorage.getItem("swim_current_admin");
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+  const isRoot = currentAdmin?.role === "root";
+  const isSubAdmin = currentAdmin?.role === "sub";
+  const isSystemAdmin = currentAdmin != null; // root or sub
+  // 학교 관리 등 일반 관리 권한 (학교 관리자 or 시스템 관리자)
+  const hasAdminPower = isAdmin || isSystemAdmin;
+  // 학습 데이터 조작 권한 (root or 학교 관리자만) — sub는 제외
+  const canManageTrainingData = isRoot || isAdmin;
+
+  // 관리자 관리 상태 (root 전용)
+  const [adminList, setAdminList] = useState([]);
+  const [showAdminList, setShowAdminList] = useState(false);
+  const [showAdminPasswords, setShowAdminPasswords] = useState(false);
+  const [newAdminUsername, setNewAdminUsername] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+
+  // 학교 계정 관리 상태 (root + sub-admin)
+  const [schoolAdminList, setSchoolAdminList] = useState([]);
+  const [showSchoolList, setShowSchoolList] = useState(false);
+  const [showSchoolPasswords, setShowSchoolPasswords] = useState(false);
+
+  // 설정 탭 서브탭
+  const [settingsTab, setSettingsTab] = useState(() => {
+    if (typeof window === "undefined") return "account";
+    return sessionStorage.getItem("swim_settings_tab") || "account";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    sessionStorage.setItem("swim_settings_tab", settingsTab);
+  }, [settingsTab]);
+
+  // 로그인 모달 (신규)
+  const [loginModal, setLoginModal] = useState(null); // null | "system" | "school"
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+
+  // currentAdmin 변경시 sessionStorage 동기화
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (currentAdmin) {
+      sessionStorage.setItem("swim_current_admin", JSON.stringify(currentAdmin));
+    } else {
+      sessionStorage.removeItem("swim_current_admin");
+    }
+  }, [currentAdmin]);
+
+  // 통합 로그인 — 아이디 하나로 시스템/학교 자동 판별
+  async function handleUnifiedLogin() {
+    if (!loginUsername || !loginPassword) return;
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const result = await unifiedLogin(loginUsername.trim(), loginPassword);
+      if (!result) {
+        setLoginError("아이디 또는 비밀번호가 올바르지 않습니다");
+        return;
+      }
+
+      if (result.kind === "admin") {
+        setCurrentAdmin(result.admin);
+        setLoginModal(null);
+        setLoginUsername("");
+        setLoginPassword("");
+        const roleLabel = result.admin.role === "root" ? "최고 관리자" : "서브 관리자";
+        showToast(`${roleLabel}로 로그인`);
+      } else if (result.kind === "school") {
+        // 학교 관리자 로그인 — 컨텍스트도 그 학교로 자동 세팅
+        setIsAdmin(true);
+        setSelectedSchoolId(result.school.id);
+        localStorage.setItem("swim_school_id", result.school.id);
+        setLoginModal(null);
+        setLoginUsername("");
+        setLoginPassword("");
+        showToast(`${result.school.name} 관리자로 로그인`);
+        // 그 학교 데이터 로드
+        await handleSchoolSelect(result.school.id, { preserveAdmin: true });
+      }
+    } catch (err) {
+      setLoginError(err.message || "로그인 오류");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  // 시스템 관리자 로그아웃
+  function handleSystemLogout() {
+    setCurrentAdmin(null);
+    setShowAdminList(false);
+    setShowAdminPasswords(false);
+    setAdminList([]);
+    showToast("로그아웃");
+  }
+
+  // 관리자 목록 로드 (root 전용)
+  async function loadAdminList() {
+    if (!isRoot) return;
+    try {
+      const list = await listAdmins();
+      setAdminList(list);
+    } catch (err) {
+      showToast("관리자 목록 로드 실패", "error");
+    }
+  }
+
+  // 서브 관리자 생성
+  async function handleCreateSubAdmin() {
+    if (!isRoot) return;
+    if (!newAdminUsername || !newAdminPassword) return;
+    try {
+      await createSubAdmin(newAdminUsername.trim(), newAdminPassword, currentAdmin.id);
+      setNewAdminUsername("");
+      setNewAdminPassword("");
+      showToast("서브 관리자 생성 완료");
+      await loadAdminList();
+    } catch (err) {
+      showToast(err.message || "생성 실패", "error");
+    }
+  }
+
+  // 관리자 삭제
+  async function handleDeleteAdmin(adminId, username) {
+    if (!isRoot) return;
+    const ok = await showModal({
+      title: "관리자 삭제",
+      message: `'${username}' 계정을 삭제할까요? 되돌릴 수 없습니다.`,
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteAdmin(adminId);
+      showToast("삭제 완료");
+      await loadAdminList();
+    } catch (err) {
+      showToast(err.message || "삭제 실패", "error");
+    }
+  }
+
+  // 학교 목록 로드 (root + sub)
+  async function loadSchoolAdminList() {
+    if (!isSystemAdmin) return;
+    try {
+      const list = await listSchoolsWithSecrets();
+      setSchoolAdminList(list);
+    } catch (err) {
+      showToast("학교 목록 로드 실패", "error");
+    }
+  }
+
+  // 학교 삭제 (root + sub)
+  async function handleDeleteSchool(schoolId, name) {
+    if (!isSystemAdmin) return;
+    if (schoolId === DEFAULT_SCHOOL_ID) {
+      showToast("기본 학교는 삭제할 수 없습니다", "error");
+      return;
+    }
+    const ok = await showModal({
+      title: "학교 삭제",
+      message: `'${name}' 학교와 그 학습 데이터가 모두 삭제됩니다.\n되돌릴 수 없습니다. 계속할까요?`,
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteSchool(schoolId);
+      // 현재 선택된 학교였다면 선택 해제
+      if (selectedSchoolId === schoolId) {
+        setSelectedSchoolId("");
+        localStorage.removeItem("swim_school_id");
+      }
+      showToast("학교 삭제 완료");
+      await loadSchoolAdminList();
+      // 상단 학교 select 갱신
+      try { setSchools(await getSchools()); } catch {}
+    } catch (err) {
+      showToast(err.message || "삭제 실패", "error");
+    }
+  }
+
+  // 학교 비밀번호 변경 (root + sub)
+  async function handleUpdateSchoolPassword(schoolId, name) {
+    if (!isSystemAdmin) return;
+    const result = await showModal({
+      type: "prompt",
+      title: `${name} 비밀번호 변경`,
+      message: "새 비밀번호를 입력하세요 (4자 이상)",
+      placeholder: "새 비밀번호",
+    });
+    if (!result) return;
+    try {
+      await updateSchoolPassword(schoolId, result);
+      showToast("비밀번호 변경 완료");
+      await loadSchoolAdminList();
+    } catch (err) {
+      showToast(err.message || "변경 실패", "error");
+    }
+  }
 
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
@@ -95,6 +309,23 @@ export default function App() {
   // 모달
   const [modal, setModal] = useState(null);
   const modalResolveRef = useRef(null);
+
+  // 오버레이 dismiss — mousedown이 오버레이에서 시작한 경우에만 닫힘
+  // (input 드래그 중 mouseup이 오버레이로 나가서 실수로 닫히는 버그 방지)
+  const overlayMouseDownRef = useRef(false);
+  function overlayDismissHandlers(closeFn) {
+    return {
+      onMouseDown: (e) => {
+        overlayMouseDownRef.current = e.target === e.currentTarget;
+      },
+      onClick: (e) => {
+        if (overlayMouseDownRef.current && e.target === e.currentTarget) {
+          closeFn();
+        }
+        overlayMouseDownRef.current = false;
+      },
+    };
+  }
 
   // 토스트
   const [toast, setToast] = useState(null);
@@ -651,8 +882,9 @@ export default function App() {
     clf.addSample(stepName, features);
     localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
 
-    // 관리자: 나중에 일괄 업로드할 샘플 기록
-    if (isAdmin && selectedSchoolId) {
+    // 학습 데이터 권한자만 서버 업로드 대상 기록 (sub-admin 제외)
+    // selectedSchoolId 없으면 DEFAULT(root) 컨텍스트로 저장
+    if (canManageTrainingData) {
       recordedSamplesRef.current.push({
         motionId: currentMotion.toString(),
         stepIndex: selectedStep,
@@ -667,10 +899,12 @@ export default function App() {
 
   async function saveRecordedSamples() {
     const samples = recordedSamplesRef.current;
-    if (!samples.length || !selectedSchoolId) {
+    if (!samples.length) {
       exitPractice();
       return;
     }
+    // 학교 없으면 root 컨텍스트(DEFAULT_SCHOOL_ID)로 저장
+    const targetSchoolId = selectedSchoolId || DEFAULT_SCHOOL_ID;
 
     const total = samples.length;
     setLoadingMsg(`업로드 중... 0/${total}`);
@@ -680,7 +914,7 @@ export default function App() {
     let failed = 0;
     for (const s of samples) {
       try {
-        await saveTrainingData(s.motionId, s.stepIndex, s.features, selectedSchoolId);
+        await saveTrainingData(s.motionId, s.stepIndex, s.features, targetSchoolId);
         uploaded++;
       } catch {
         failed++;
@@ -1095,6 +1329,36 @@ export default function App() {
             <FontAwesomeIcon icon={ICONS[`motion_${currentMotion}`] || ICONS.practice} className="ph-motion-icon" />
             <h2>{m.name}</h2>
           </div>
+          {/* 카메라 빠른 전환 (드롭다운) */}
+          <div className="ph-camera-picker">
+            <FontAwesomeIcon icon={ICONS.camera} className="ph-camera-icon" />
+            <select
+              className="ph-camera-select"
+              value={selectedCameraId}
+              onChange={async (e) => {
+                const newId = e.target.value;
+                setSelectedCameraId(newId);
+                localStorage.setItem("swim_camera_id", newId);
+                // 실행 중이면 카메라 재시작
+                if (cameraActive) {
+                  await stopCamera();
+                  await startCamera();
+                }
+                showToast("카메라 전환됨");
+              }}
+              aria-label="카메라 전환"
+            >
+              {cameras.length === 0 ? (
+                <option value="">카메라 찾는 중...</option>
+              ) : (
+                cameras.map((cam, idx) => (
+                  <option key={cam.deviceId} value={cam.deviceId}>
+                    {cam.label || `카메라 ${idx + 1}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
           <span className={`mode-badge ${isRecord ? "mode-record" : practiceMode === "knn" ? "mode-knn" : "mode-instant"}`}>
             {isRecord ? "녹화" : practiceMode === "knn" ? "AI" : "즉시"}
           </span>
@@ -1327,8 +1591,8 @@ export default function App() {
             <button className="ctrl-btn primary" onClick={recordSample}>
               <FontAwesomeIcon icon={ICONS.camera} /> 녹화 (SPACE)
             </button>
-            <button className="ctrl-btn secondary" onClick={isAdmin && selectedSchoolId ? saveRecordedSamples : exitPractice}>
-              {isAdmin && selectedSchoolId ? "저장" : "완료"}
+            <button className="ctrl-btn secondary" onClick={canManageTrainingData ? saveRecordedSamples : exitPractice}>
+              {canManageTrainingData ? "저장" : "완료"}
             </button>
           </div>
         )}
@@ -1381,7 +1645,7 @@ export default function App() {
           자세를 취하고 <b style={{ color: "var(--accent)" }}>녹화</b> 버튼을 눌러 저장하세요.
           단계별 10~15개 권장.
         </p>
-        {isAdmin ? (
+        {canManageTrainingData ? (
           <p className="record-info" style={{ color: "var(--success)", marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
             <FontAwesomeIcon icon={ICONS.adminLogin} /> 관리자 모드: 서버에 저장됩니다
           </p>
@@ -1701,23 +1965,51 @@ export default function App() {
     }
   }
 
-  // 학교 선택
-  async function handleSchoolSelect(schoolId) {
-    setIsAdmin(false);
+  // 학교 선택 (누구든 선택 가능 — 데이터 조회는 권한 무관)
+  // preserveAdmin=true 이면 학교 관리자 상태 유지
+  async function handleSchoolSelect(schoolId, opts = {}) {
+    if (!opts.preserveAdmin) setIsAdmin(false);
     setSelectedSchoolId(schoolId);
     localStorage.setItem("swim_school_id", schoolId);
 
-    // 해당 학교 데이터 로드
+    // 로딩 오버레이 표시 (dataLoading + loadingMsg 둘 다 필요)
+    const targetName = schoolId && schoolId !== DEFAULT_SCHOOL_ID
+      ? (schools.find(s => s.id === schoolId)?.name || "학교")
+      : "기본 (root)";
+    setLoadingMsg(`${targetName} 데이터 불러오는 중...`);
     setDataLoading(true);
+
+    // 해당 학교 데이터 로드 (학교간 완전 격리, 6개 동작)
+    let totalLoaded = 0;
     for (let i = 1; i <= 6; i++) {
+      setLoadingMsg(`${targetName} 데이터 불러오는 중... (${i}/6)`);
       await classifiersRef.current[i].loadFromSupabase(
         i.toString(), MOTIONS[i].steps, schoolId || null
       );
+      totalLoaded += classifiersRef.current[i].totalSamples;
     }
-    mergeLocalStorage();
+
+    // localStorage merge는 default(root) 컨텍스트에서만 — 학교간 오염 방지
+    const isDefaultContext = !schoolId || schoolId === DEFAULT_SCHOOL_ID;
+    if (isDefaultContext) mergeLocalStorage();
+
     setDataLoading(false);
+    setLoadingMsg("");
     forceUpdate(n => n + 1);
-    showToast(schoolId ? "학교 데이터 로드 완료" : "기본 데이터 로드 완료");
+
+    const label = isDefaultContext ? "기본 데이터" : "학교 데이터";
+    if (totalLoaded === 0) {
+      showToast(`${label} 로드 완료 — 저장된 샘플 없음`, "error");
+    } else {
+      showToast(`${label} 로드 완료 — 총 ${totalLoaded}개 샘플`);
+    }
+  }
+
+  // 학교 컨텍스트 전환 (root/sub 전용 — 학교 계정 관리 리스트에서 호출)
+  async function switchSchoolContext(schoolId, name) {
+    if (!isSystemAdmin) return;
+    await handleSchoolSelect(schoolId);
+    showToast(`컨텍스트: ${name}`);
   }
 
   // 설정 탭
@@ -1733,53 +2025,300 @@ export default function App() {
           <p className="practice-hero-sub">앱 설정 및 데이터 관리</p>
         </div>
 
-        {/* 학교 설정 */}
-        <div className="settings-section">
-          <h3>학교 설정</h3>
+        {/* 서브탭 바 — 기기 설정은 로그인 없이도 접근 가능 */}
+        {(() => {
+          const tabs = [
+            { key: "account", label: "내 계정", icon: ICONS.adminLogin, show: hasAdminPower },
+            { key: "schools", label: "학교 관리", icon: ICONS.school, show: isSystemAdmin },
+            { key: "data", label: "데이터 관리", icon: ICONS.record, show: canManageTrainingData },
+            { key: "device", label: "기기 설정", icon: ICONS.camera, show: true },
+          ].filter(t => t.show);
+          const currentValid = tabs.some(t => t.key === settingsTab);
+          if (!currentValid && tabs.length > 0) {
+            setTimeout(() => setSettingsTab(tabs[0].key), 0);
+          }
+          return (
+            <div className="settings-subtabs" role="tablist">
+              {tabs.map(t => (
+                <button
+                  key={t.key}
+                  role="tab"
+                  className={`settings-subtab ${settingsTab === t.key ? "active" : ""}`}
+                  onClick={() => setSettingsTab(t.key)}
+                >
+                  <FontAwesomeIcon icon={t.icon} />
+                  <span>{t.label}</span>
+                </button>
+              ))}
+              {!hasAdminPower && (
+                <button
+                  className="settings-subtab settings-subtab-login"
+                  onClick={() => {
+                    setLoginModal("open");
+                    setLoginUsername("");
+                    setLoginPassword("");
+                    setLoginError("");
+                  }}
+                  title="관리자 로그인"
+                >
+                  <FontAwesomeIcon icon={ICONS.adminLogin} />
+                  <span>로그인</span>
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
-          {/* 현재 상태 */}
+        {/* 로그아웃 상태 + 로그인 필요한 탭 선택시 — 로그인 안내 카드 */}
+        {!hasAdminPower && settingsTab !== "device" && (
+          <div className="settings-section login-required-card">
+            <div className="login-required-icon">
+              <FontAwesomeIcon icon={ICONS.lock} />
+            </div>
+            <h3>로그인이 필요합니다</h3>
+            <p className="login-required-desc">
+              이 섹션은 관리자 로그인이 필요합니다.
+              연습·학습 탭과 기기 설정은 로그인 없이도 사용 가능합니다.
+            </p>
+            <div className="login-actions">
+              <button
+                className="setting-btn primary"
+                onClick={() => {
+                  setLoginModal("open");
+                  setLoginUsername("");
+                  setLoginPassword("");
+                  setLoginError("");
+                }}
+              >
+                <FontAwesomeIcon icon={ICONS.adminLogin} /> 관리자 로그인
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 학교 설정 → 내 계정 탭 */}
+        {hasAdminPower && settingsTab === "account" && (
+        <div className="settings-section">
+          <h3>내 계정 · 현재 컨텍스트</h3>
+
+          {/* 현재 컨텍스트 */}
           <div className="setting-item">
             <span className="setting-icon"><FontAwesomeIcon icon={ICONS.school} /></span>
             <div className="setting-text">
-              <h4>현재 학교</h4>
+              <h4>현재 학교 컨텍스트</h4>
               <p>
-                {selectedSchoolId
+                {selectedSchoolId && selectedSchoolId !== DEFAULT_SCHOOL_ID
                   ? schools.find(s => s.id === selectedSchoolId)?.name || "알 수 없음"
-                  : "기본 (개발자 제공)"}
-                {isAdmin && " (관리자)"}
+                  : "기본 (root 데이터)"}
+                {isAdmin && " · 학교 관리자"}
               </p>
             </div>
           </div>
 
-          {/* 학교 선택 */}
-          <select
-            value={selectedSchoolId}
-            onChange={(e) => handleSchoolSelect(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "12px",
-              background: "var(--card)",
-              border: "1px solid var(--border)",
-              borderRadius: "8px",
-              color: "var(--text)",
-              fontSize: "14px",
-              marginTop: "8px",
-              cursor: "pointer",
-            }}
-          >
-            <option value="">기본 (개발자 제공 데이터)</option>
-            {schools.filter(s => s.id !== DEFAULT_SCHOOL_ID).map((school) => (
-              <option key={school.id} value={school.id}>
-                {school.name}
-              </option>
-            ))}
-          </select>
+          {/* 컨텍스트 전환 (root/sub 전용 — 학교 관리자는 자기 학교 고정) */}
+          {isSystemAdmin && (
+            <label className="pretty-select">
+              <span className="pretty-select-label">
+                <FontAwesomeIcon icon={ICONS.refresh} /> 컨텍스트 전환
+              </span>
+              <select
+                value={selectedSchoolId || DEFAULT_SCHOOL_ID}
+                onChange={(e) => handleSchoolSelect(e.target.value)}
+                className="pretty-select-input"
+                disabled={dataLoading}
+              >
+                <option value={DEFAULT_SCHOOL_ID}>기본 (root 데이터)</option>
+                {schools.filter(s => s.id !== DEFAULT_SCHOOL_ID).map((school) => (
+                  <option key={school.id} value={school.id}>
+                    {school.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
-          {/* 새 학교 등록 (관리자 전용) */}
-          {isAdmin && (
+          {/* 현재 로드된 학습 데이터 요약 (모두 볼 수 있음) */}
+          {!dataLoading && (
+            <div className="data-summary-card">
+              <div className="data-summary-head">
+                <FontAwesomeIcon icon={ICONS.info} />
+                <span>현재 로드된 학습 데이터</span>
+                <span className="data-summary-total">
+                  {Object.values(classifiersRef.current).reduce((s, c) => s + (c?.totalSamples || 0), 0)}개
+                </span>
+              </div>
+              <div className="data-summary-grid">
+                {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
+                  const clf = classifiersRef.current[id];
+                  const total = clf?.totalSamples || 0;
+                  const trained = (clf?.numClasses || 0) >= 2;
+                  return (
+                    <div key={id} className={`data-summary-item ${trained ? "ready" : ""}`}>
+                      <FontAwesomeIcon icon={ICONS[`motion_${id}`] || ICONS.practice} />
+                      <span className="data-summary-name">{m.name}</span>
+                      <span className="data-summary-count">{total}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 로그인 상태 뱃지 */}
+          {isSystemAdmin && (
+            <div className="admin-status-card">
+              <div className="admin-status-role">
+                <FontAwesomeIcon icon={isRoot ? ICONS.trophy : ICONS.adminLogin} />
+                <span>{isRoot ? "최고 관리자 (Root)" : "서브 관리자"}</span>
+              </div>
+              <div className="admin-status-name">{currentAdmin.username}</div>
+              <button
+                className="setting-btn small"
+                onClick={handleSystemLogout}
+              >
+                <FontAwesomeIcon icon={ICONS.adminLogout} /> 로그아웃
+              </button>
+            </div>
+          )}
+
+          {/* 학교 관리자 로그아웃 (레거시) */}
+          {isAdmin && !isSystemAdmin && (
             <button
               className="setting-btn"
-              style={{ marginTop: "8px" }}
+              style={{ marginTop: "12px" }}
+              onClick={() => {
+                setIsAdmin(false);
+                setShowAdminLogin(false);
+                showToast("학교 관리자 로그아웃");
+              }}
+            >
+              <FontAwesomeIcon icon={ICONS.adminLogout} /> 관리자 로그아웃
+            </button>
+          )}
+        </div>
+        )}
+
+        {/* ═══ 관리자 관리 (root 전용, 내 계정 탭) ═══ */}
+        {isRoot && settingsTab === "account" && (
+          <div className="settings-section">
+            <h3>
+              <FontAwesomeIcon icon={ICONS.trophy} /> 관리자 관리
+              <span className="root-only-badge">ROOT 전용</span>
+            </h3>
+            <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 12 }}>
+              서브 관리자를 만들고 조회합니다. 서브 관리자는 관리자 관리를 제외한 모든 권한을 갖습니다.
+            </p>
+
+            {/* 서브 관리자 추가 폼 */}
+            <div className="admin-create-form">
+              <input
+                type="text"
+                className="admin-form-input"
+                placeholder="아이디 (3자 이상)"
+                value={newAdminUsername}
+                onChange={(e) => setNewAdminUsername(e.target.value)}
+                autoComplete="off"
+              />
+              <input
+                type="text"
+                className="admin-form-input"
+                placeholder="비밀번호 (6자 이상)"
+                value={newAdminPassword}
+                onChange={(e) => setNewAdminPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+              <button
+                className="setting-btn primary"
+                disabled={!newAdminUsername || !newAdminPassword}
+                onClick={handleCreateSubAdmin}
+              >
+                <FontAwesomeIcon icon={ICONS.add} /> 서브 관리자 추가
+              </button>
+            </div>
+
+            {/* 관리자 목록 열람 */}
+            <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="setting-btn"
+                onClick={async () => {
+                  if (!showAdminList) await loadAdminList();
+                  setShowAdminList(v => !v);
+                }}
+              >
+                <FontAwesomeIcon icon={showAdminList ? ICONS.close : ICONS.info} />
+                {showAdminList ? " 목록 닫기" : " 관리자 목록 보기"}
+              </button>
+              {showAdminList && (
+                <button
+                  className="setting-btn"
+                  onClick={() => setShowAdminPasswords(v => !v)}
+                >
+                  <FontAwesomeIcon icon={showAdminPasswords ? ICONS.lock : ICONS.unlock} />
+                  {showAdminPasswords ? " 비밀번호 숨기기" : " 비밀번호 보기"}
+                </button>
+              )}
+            </div>
+
+            {showAdminList && (
+              <div className="admin-list">
+                {adminList.length === 0 ? (
+                  <p className="admin-list-empty">등록된 관리자가 없습니다.</p>
+                ) : (
+                  adminList.map(a => (
+                    <div key={a.id} className={`admin-list-row role-${a.role}`}>
+                      <div className="admin-list-role">
+                        <FontAwesomeIcon icon={a.role === "root" ? ICONS.trophy : ICONS.adminLogin} />
+                        <span>{a.role.toUpperCase()}</span>
+                      </div>
+                      <div className="admin-list-info">
+                        <div className="admin-list-username">{a.username}</div>
+                        <div className="admin-list-password">
+                          {showAdminPasswords
+                            ? <span className="pw-visible">{a.password}</span>
+                            : <span className="pw-masked">••••••••</span>
+                          }
+                        </div>
+                        <div className="admin-list-date">
+                          {new Date(a.created_at).toLocaleDateString("ko-KR")}
+                        </div>
+                      </div>
+                      {a.role !== "root" && (
+                        <button
+                          className="admin-list-delete"
+                          onClick={() => handleDeleteAdmin(a.id, a.username)}
+                          title="이 관리자 삭제"
+                          aria-label="삭제"
+                        >
+                          <FontAwesomeIcon icon={ICONS.trash} />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {showAdminPasswords && (
+              <p className="admin-warn-note">
+                <FontAwesomeIcon icon={ICONS.warn} /> 비밀번호가 화면에 노출됩니다. 주변에 사람이 있는지 확인하세요.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ═══ 학교 관리 탭 (root + sub-admin) ═══ */}
+        {isSystemAdmin && settingsTab === "schools" && (
+          <div className="settings-section">
+            <h3>
+              <FontAwesomeIcon icon={ICONS.school} /> 학교 관리
+            </h3>
+            <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 12 }}>
+              학교 계정을 만들고 관리합니다. 컨텍스트 전환은 <b style={{ color: "var(--accent)" }}>내 계정</b> 탭에서.
+            </p>
+
+            {/* 새 학교 등록 */}
+            <button
+              className="setting-btn primary"
               onClick={async () => {
                 const result = await showModal({ type: "prompt2", title: "새 학교 등록", message: "학교 이름과 관리자 비밀번호를 입력하세요.", placeholder: "학교 이름", placeholder2: "관리자 비밀번호" });
                 if (result) handleCreateSchool(result.val1, result.val2);
@@ -1787,112 +2326,147 @@ export default function App() {
             >
               <FontAwesomeIcon icon={ICONS.add} /> 새 학교 등록
             </button>
-          )}
 
-          {/* 관리자 로그인 */}
-          {!isAdmin && !showAdminLogin && (
-            <button
-              className="setting-btn"
-              style={{ marginTop: "12px" }}
-              onClick={() => setShowAdminLogin(true)}
-            >
-              <FontAwesomeIcon icon={ICONS.adminLogin} /> 관리자 로그인
-            </button>
-          )}
+            <div style={{ height: 16 }} />
 
-          {!isAdmin && showAdminLogin && (
-            <div className="admin-login-box" style={{ marginTop: "12px" }}>
-              <div className="admin-login-header">
-                <span>
-                  <FontAwesomeIcon icon={ICONS.adminLogin} />
-                  {" "}{selectedSchoolId ? (schools.find(s => s.id === selectedSchoolId)?.name || "학교") : "기본 (개발자)"} 관리자
-                </span>
-                <button className="admin-login-close" onClick={() => { setShowAdminLogin(false); setAdminPassword(""); }} aria-label="닫기">
-                  <FontAwesomeIcon icon={ICONS.close} />
-                </button>
-              </div>
-              <div className="admin-login-input-row">
-                <input
-                  type="password"
-                  placeholder="비밀번호를 입력하세요"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && adminPassword) {
-                      handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
-                      setAdminPassword("");
-                      setShowAdminLogin(false);
-                    }
-                  }}
-                  className="admin-login-input"
-                  autoFocus
-                />
+            <h3 style={{ fontSize: 13, color: "var(--text-3)", marginTop: 16, marginBottom: 12 }}>
+              학교 계정 목록
+            </h3>
+
+            {/* 목록 열람 / 비밀번호 토글 */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="setting-btn"
+                onClick={async () => {
+                  if (!showSchoolList) await loadSchoolAdminList();
+                  setShowSchoolList(v => !v);
+                }}
+              >
+                <FontAwesomeIcon icon={showSchoolList ? ICONS.close : ICONS.info} />
+                {showSchoolList ? " 목록 닫기" : " 학교 목록 보기"}
+              </button>
+              {showSchoolList && (
                 <button
-                  className="admin-login-submit"
-                  disabled={!adminPassword}
+                  className="setting-btn"
+                  onClick={() => setShowSchoolPasswords(v => !v)}
+                >
+                  <FontAwesomeIcon icon={showSchoolPasswords ? ICONS.lock : ICONS.unlock} />
+                  {showSchoolPasswords ? " 비밀번호 숨기기" : " 비밀번호 보기"}
+                </button>
+              )}
+            </div>
+
+            {showSchoolList && (
+              <div className="admin-list" style={{ marginTop: 16 }}>
+                {schoolAdminList.length === 0 ? (
+                  <p className="admin-list-empty">등록된 학교가 없습니다.</p>
+                ) : (
+                  schoolAdminList.map(s => {
+                    const isDefault = s.id === DEFAULT_SCHOOL_ID;
+                    const isCurrent = (selectedSchoolId || DEFAULT_SCHOOL_ID) === s.id;
+                    return (
+                      <div
+                        key={s.id}
+                        className={`admin-list-row ${isDefault ? "role-root" : ""} ${isCurrent ? "current-context" : ""}`}
+                      >
+                        <div className="admin-list-role">
+                          <FontAwesomeIcon icon={ICONS.school} />
+                          <span>{isDefault ? "기본" : "학교"}</span>
+                        </div>
+                        <div className="admin-list-info">
+                          <div className="admin-list-username">
+                            {s.name}
+                            {isCurrent && (
+                              <span className="current-context-badge">현재 컨텍스트</span>
+                            )}
+                          </div>
+                          <div className="admin-list-password">
+                            {showSchoolPasswords
+                              ? <span className="pw-visible">{s.admin_password}</span>
+                              : <span className="pw-masked">••••••••</span>
+                            }
+                          </div>
+                          <div className="admin-list-date">
+                            {new Date(s.created_at).toLocaleDateString("ko-KR")}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            className="admin-list-delete"
+                            style={{ background: "rgba(45,212,191,0.12)", color: "var(--success)", borderColor: "rgba(45,212,191,0.3)" }}
+                            onClick={() => switchSchoolContext(s.id, s.name)}
+                            disabled={isCurrent}
+                            title={isCurrent ? "이미 이 학교 컨텍스트임" : `${s.name}의 학습 데이터로 전환`}
+                            aria-label="이 학교로 전환"
+                          >
+                            <FontAwesomeIcon icon={ICONS.refresh} />
+                          </button>
+                          <button
+                            className="admin-list-delete"
+                            style={{ background: "rgba(0,212,255,0.12)", color: "var(--accent)", borderColor: "rgba(0,212,255,0.3)" }}
+                            onClick={() => handleUpdateSchoolPassword(s.id, s.name)}
+                            title="비밀번호 변경"
+                            aria-label="비밀번호 변경"
+                          >
+                            <FontAwesomeIcon icon={ICONS.adminLogin} />
+                          </button>
+                          {!isDefault && (
+                            <button
+                              className="admin-list-delete"
+                              onClick={() => handleDeleteSchool(s.id, s.name)}
+                              title="학교 삭제 (학습 데이터 포함 완전 삭제)"
+                              aria-label="삭제"
+                            >
+                              <FontAwesomeIcon icon={ICONS.trash} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {showSchoolPasswords && (
+              <p className="admin-warn-note">
+                <FontAwesomeIcon icon={ICONS.warn} /> 비밀번호가 화면에 노출됩니다. 주변에 사람이 있는지 확인하세요.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 녹화 모드 → 데이터 관리 탭 */}
+        {canManageTrainingData && settingsTab === "data" && (
+          <div className="settings-section">
+            <h3>
+              <FontAwesomeIcon icon={ICONS.record} /> AI 학습 녹화
+            </h3>
+            <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 12 }}>
+              동작별 학습 데이터를 녹화합니다
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => (
+                <button
+                  key={id}
+                  className="setting-btn"
                   onClick={() => {
-                    handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
-                    setAdminPassword("");
-                    setShowAdminLogin(false);
+                    setCurrentMotion(parseInt(id));
+                    setSelectedStep(0);
+                    setActiveTab("practice");
+                    setPracticeMode("record");
+                    startCamera();
                   }}
                 >
-                  확인
+                  <FontAwesomeIcon icon={ICONS[`motion_${id}`] || ICONS.record} /> {m.name} 녹화
                 </button>
-              </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* 관리자 로그아웃 */}
-          {isAdmin && (
-            <button
-              className="setting-btn"
-              style={{ marginTop: "12px" }}
-              onClick={() => {
-                setIsAdmin(false);
-                setShowAdminLogin(false);
-                showToast("관리자 로그아웃");
-              }}
-            >
-              <FontAwesomeIcon icon={ICONS.adminLogout} /> 관리자 로그아웃
-            </button>
-          )}
-
-          {/* 녹화 모드 (관리자 전용) */}
-          {isAdmin && (
-            <div className="setting-section" style={{ marginTop: "12px" }}>
-              <h3>
-                <FontAwesomeIcon icon={ICONS.record} /> AI 학습 녹화
-              </h3>
-              <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 8 }}>동작별 학습 데이터를 녹화합니다</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => (
-                  <button
-                    key={id}
-                    className="setting-btn"
-                    onClick={() => {
-                      setCurrentMotion(parseInt(id));
-                      setSelectedStep(0);
-                      setActiveTab("practice");
-                      setPracticeMode("record");
-                      startCamera();
-                    }}
-                  >
-                    <FontAwesomeIcon icon={ICONS[`motion_${id}`] || ICONS.record} /> {m.name} 녹화
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-
-          {dataLoading && (
-            <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "8px" }}>
-              <FontAwesomeIcon icon={ICONS.hourglass} /> 학습 데이터 로딩 중...
-            </p>
-          )}
-        </div>
-
-        {/* 카메라 설정 */}
+        {/* 카메라 설정 → 기기 설정 탭 */}
+        {settingsTab === "device" && (
         <div className="settings-section">
           <h3>카메라 설정</h3>
           <div className="setting-item">
@@ -1902,36 +2476,31 @@ export default function App() {
               <p>사용할 카메라를 선택하세요</p>
             </div>
           </div>
-          <select
-            value={selectedCameraId}
-            onChange={(e) => {
-              const newId = e.target.value;
-              setSelectedCameraId(newId);
-              localStorage.setItem("swim_camera_id", newId);
-              showToast("카메라가 변경되었습니다");
-            }}
-            style={{
-              width: "100%",
-              padding: "12px",
-              background: "var(--card)",
-              border: "1px solid var(--border)",
-              borderRadius: "8px",
-              color: "var(--text)",
-              fontSize: "14px",
-              marginTop: "8px",
-              cursor: "pointer",
-            }}
-          >
-            {cameras.length === 0 ? (
-              <option value="">카메라를 찾는 중...</option>
-            ) : (
-              cameras.map((cam, idx) => (
-                <option key={cam.deviceId} value={cam.deviceId}>
-                  {cam.label || `카메라 ${idx + 1}`}
-                </option>
-              ))
-            )}
-          </select>
+          <label className="pretty-select">
+            <span className="pretty-select-label">
+              <FontAwesomeIcon icon={ICONS.camera} /> 사용할 카메라
+            </span>
+            <select
+              value={selectedCameraId}
+              onChange={(e) => {
+                const newId = e.target.value;
+                setSelectedCameraId(newId);
+                localStorage.setItem("swim_camera_id", newId);
+                showToast("카메라가 변경되었습니다");
+              }}
+              className="pretty-select-input"
+            >
+              {cameras.length === 0 ? (
+                <option value="">카메라를 찾는 중...</option>
+              ) : (
+                cameras.map((cam, idx) => (
+                  <option key={cam.deviceId} value={cam.deviceId}>
+                    {cam.label || `카메라 ${idx + 1}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
           <button
             className="setting-btn"
             style={{ marginTop: "12px" }}
@@ -1939,10 +2508,21 @@ export default function App() {
           >
             <FontAwesomeIcon icon={ICONS.refresh} /> 카메라 목록 새로고침
           </button>
+
+          <div style={{ height: 20 }} />
+          <h3>화면 크기</h3>
+          <div className="setting-item">
+            <span className="setting-icon"><FontAwesomeIcon icon={ICONS.settings} /></span>
+            <div className="setting-text">
+              <h4>현재 배율: {Math.round(effectiveScale * 100)}%</h4>
+              <p>{uiScale == null ? "자동 감지 모드" : "수동 설정됨"} · 화면 우상단 툴바에서 조정</p>
+            </div>
+          </div>
         </div>
+        )}
 
         {/* 데이터 관리 (관리자 전용) */}
-        {isAdmin && (<div className="settings-section">
+        {canManageTrainingData && settingsTab === "data" && (<div className="settings-section">
           <h3>학습 데이터</h3>
           {Object.entries(MOTIONS).map(([id, m]) => {
             const clf = classifiersRef.current[id];
@@ -2031,7 +2611,7 @@ export default function App() {
           })}
         </div>)}
 
-        {isAdmin && (<div className="settings-section">
+        {canManageTrainingData && settingsTab === "data" && (<div className="settings-section">
           <h3>전체 데이터</h3>
           <button
             className="setting-btn primary"
@@ -2227,7 +2807,7 @@ export default function App() {
 
       {/* 커스텀 모달 */}
       {modal && (
-        <div className="modal-overlay" onClick={() => closeModal(null)}>
+        <div className="modal-overlay" {...overlayDismissHandlers(() => closeModal(null))}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             {modal.title && <h3 className="modal-title">{modal.title}</h3>}
             {modal.message && <p className="modal-message">{modal.message}</p>}
@@ -2276,11 +2856,77 @@ export default function App() {
 
       {/* 자세 미리보기 오버레이 */}
       {previewImage && (
-        <div className="preview-overlay" onClick={() => setPreviewImage(null)}>
+        <div className="preview-overlay" {...overlayDismissHandlers(() => setPreviewImage(null))}>
           <img src={previewImage} alt="자세 미리보기" />
           <button className="preview-close" onClick={() => setPreviewImage(null)} aria-label="닫기">
             <FontAwesomeIcon icon={ICONS.close} />
           </button>
+        </div>
+      )}
+
+      {/* 로그인 모달 (통합 — 시스템/학교 자동 판별) */}
+      {loginModal && (
+        <div className="login-overlay" {...overlayDismissHandlers(() => { setLoginModal(null); setLoginError(""); })}>
+          <div className="login-card" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="login-close"
+              onClick={() => { setLoginModal(null); setLoginError(""); }}
+              aria-label="닫기"
+            >
+              <FontAwesomeIcon icon={ICONS.close} />
+            </button>
+
+            <div className="login-brand">
+              <div className="login-icon">
+                <FontAwesomeIcon icon={ICONS.adminLogin} />
+              </div>
+              <div className="login-brand-text">
+                <div className="login-eyebrow">LOGIN</div>
+                <div className="login-title">관리자 로그인</div>
+              </div>
+            </div>
+
+            <div className="login-field">
+              <label>아이디 또는 학교명</label>
+              <input
+                type="text"
+                className="login-input"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && loginPassword) handleUnifiedLogin(); }}
+                placeholder="예) root · 양양초등학교"
+                autoComplete="username"
+                autoFocus
+              />
+            </div>
+            <div className="login-field">
+              <label>비밀번호</label>
+              <input
+                type="password"
+                className="login-input"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleUnifiedLogin(); }}
+                placeholder="비밀번호"
+                autoComplete="current-password"
+              />
+            </div>
+            {loginError && (
+              <p className="login-error">
+                <FontAwesomeIcon icon={ICONS.warn} /> {loginError}
+              </p>
+            )}
+            <button
+              className="login-submit"
+              disabled={!loginUsername || !loginPassword || loginBusy}
+              onClick={handleUnifiedLogin}
+            >
+              {loginBusy ? <><FontAwesomeIcon icon={ICONS.hourglass} spin /> 확인 중...</> : "로그인"}
+            </button>
+            <p className="login-hint">
+              시스템 관리자 아이디 또는 학교명으로 로그인하세요.
+            </p>
+          </div>
         </div>
       )}
 
