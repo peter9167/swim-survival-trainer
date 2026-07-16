@@ -342,6 +342,19 @@ export default function App() {
   });
   const [autoScale, setAutoScale] = useState(1);
 
+  // 스케일 툴바 접기 상태 (좁은 화면에선 기본 접힘)
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const saved = localStorage.getItem("swim_scale_collapsed");
+    if (saved != null) return saved === "1";
+    // 초기값: 좁은 화면(≤640px)이면 자동으로 접힘
+    return window.innerWidth <= 640;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("swim_scale_collapsed", toolbarCollapsed ? "1" : "0");
+  }, [toolbarCollapsed]);
+
   // 이 모니터에 맞춘 최적 스케일 자동 감지
   // - 뷰포트 너비 (가장 강한 신호)
   // - DPR (고DPI 화면에서 물리적 크기 보정)
@@ -2735,42 +2748,61 @@ export default function App() {
 
   return (
     <div className="app-frame">
-      {/* 화면 크기 조절 툴바 (강사용, 상시 노출) */}
-      <div className="scale-toolbar" aria-label="화면 크기 조절">
+      {/* 화면 크기 조절 툴바 (접기/펴기 가능) */}
+      {toolbarCollapsed ? (
         <button
-          className="scale-btn"
-          onClick={() => bumpScale(-0.1)}
-          aria-label="글자 작게"
-          title="글자 작게"
+          className="scale-toolbar-toggle collapsed"
+          onClick={() => setToolbarCollapsed(false)}
+          aria-label="화면 크기 조절 열기"
+          title="화면 크기 조절 열기"
         >
-          A−
+          Aa
         </button>
-        <button
-          className="scale-btn scale-btn-value"
-          onClick={() => setUiScale(null)}
-          aria-label="자동 크기로 되돌리기"
-          title="자동 감지 모드로 전환 (오버라이드 해제)"
-        >
-          {uiScale == null && <span className="scale-auto-dot" aria-hidden="true" />}
-          {Math.round(effectiveScale * 100)}%
-        </button>
-        <button
-          className="scale-btn"
-          onClick={() => bumpScale(0.1)}
-          aria-label="글자 크게"
-          title="글자 크게"
-        >
-          A+
-        </button>
-        <button
-          className="scale-btn scale-btn-fit"
-          onClick={fitToScreen}
-          aria-label="이 모니터에 맞추기"
-          title="이 모니터에 최적 크기로 맞추기 (뷰포트+DPR+터치 감지)"
-        >
-          ⤢
-        </button>
-      </div>
+      ) : (
+        <div className="scale-toolbar" aria-label="화면 크기 조절">
+          <button
+            className="scale-btn"
+            onClick={() => bumpScale(-0.1)}
+            aria-label="글자 작게"
+            title="글자 작게"
+          >
+            A−
+          </button>
+          <button
+            className="scale-btn scale-btn-value"
+            onClick={() => setUiScale(null)}
+            aria-label="자동 크기로 되돌리기"
+            title="자동 감지 모드로 전환 (오버라이드 해제)"
+          >
+            {uiScale == null && <span className="scale-auto-dot" aria-hidden="true" />}
+            {Math.round(effectiveScale * 100)}%
+          </button>
+          <button
+            className="scale-btn"
+            onClick={() => bumpScale(0.1)}
+            aria-label="글자 크게"
+            title="글자 크게"
+          >
+            A+
+          </button>
+          <button
+            className="scale-btn scale-btn-fit"
+            onClick={fitToScreen}
+            aria-label="이 모니터에 맞추기"
+            title="이 모니터에 최적 크기로 맞추기"
+          >
+            ⤢
+          </button>
+          <button
+            className="scale-btn scale-btn-collapse"
+            onClick={() => setToolbarCollapsed(true)}
+            aria-label="툴바 접기"
+            title="툴바 접기"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* 셸: 사이드바(대형) 또는 하단 탭바(모바일) + 메인 */}
       <div className={`app-shell ${!showTabBar ? "app-shell-fullscreen" : ""}`}>
