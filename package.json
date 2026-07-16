@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "screenshots": "node scripts/screenshots.mjs",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.3.0",
@@ -16,5 +18,9 @@
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1",
+    "sharp": "^0.35.3"
   }
 }

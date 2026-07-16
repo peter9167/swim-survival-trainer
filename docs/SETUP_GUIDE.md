@@ -58,7 +58,14 @@ https://swim-survival-trainer.vercel.app
 `⤢` 버튼을 누르면 자동으로 이 모니터에 최적화된 크기로 조정됩니다.
 
 ### 5️⃣ 학교 관리자 로그인
-설정 탭 → **"관리자 로그인"** 클릭 → 학교명과 비밀번호 입력.
+설정 탭 → **"관리자 로그인"** 클릭.
+
+![설정 탭 로그아웃 상태](screenshots/04-settings-logged-out.png)
+
+단일 로그인 폼에 **학교명**과 **비밀번호** 입력.
+
+![로그인 모달](screenshots/05-login-modal.png)
+
 계정이 없으면 시스템 관리자에게 학교 계정 생성을 요청하세요.
 
 ---
@@ -75,6 +82,26 @@ https://swim-survival-trainer.vercel.app
 
 > **로그인 방법**: 아이디 또는 학교명 하나만 입력하면 시스템이 자동으로 판별합니다.
 > 예) `root` / `양양초등학교`
+
+### 로그인 후 화면
+
+![내 계정 탭](screenshots/06-settings-account-root.png)
+
+**Root 전용 · 관리자 관리** — 서브 관리자를 생성/조회/삭제.
+
+![관리자 관리](screenshots/07-admin-management.png)
+
+**학교 관리 탭** (root+sub) — 학교 계정 관리, 각 행의 🔄 초록 버튼으로 컨텍스트 전환.
+
+![학교 계정 목록](screenshots/08b-schools-list.png)
+
+**데이터 관리 탭** — 각 동작의 AI 학습 데이터를 녹화·업로드·삭제.
+
+![데이터 관리](screenshots/09-settings-data.png)
+
+**기기 설정 탭** — 로그인 없이도 접근 가능.
+
+![기기 설정](screenshots/10-settings-device.png)
 
 ---
 
@@ -93,6 +120,18 @@ https://swim-survival-trainer.vercel.app
 - **연습** — 카메라 앞에서 자세 시연 · 실시간 AI 채점
 - **학습** — 이론 콘텐츠 (생존수영 소개 · 안전수칙 · 이안류/저류 · 각 동작 상세 · CPR)
 - **설정** — 계정 · 학교 관리 · 데이터 관리 · 기기 설정
+
+### 연습 탭
+
+![연습 탭 - 동작 선택](screenshots/01-practice-motion-select.png)
+
+### 학습 탭 — Duolingo 스타일 여정
+
+![학습 오션 맵](screenshots/02-learn-ocean-path.png)
+
+### 학습 상세 — 이안류 예시
+
+![이안류 학습 상세](screenshots/03-learn-rip-current.png)
 
 ---
 

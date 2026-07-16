@@ -6,10 +6,25 @@ config.autoAddCss = false;
 export const metadata = {
   title: "생존수영 트레이너",
   description: "AI 기반 실시간 생존수영 동작 분석 시스템",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "생존수영",
+    startupImage: [
+      { url: "/icons/pwa/apple-touch-icon.png" },
+    ],
+  },
+  icons: {
+    icon: [
+      { url: "/icons/pwa/favicon.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/pwa/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/pwa/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [
+      { url: "/icons/pwa/apple-touch-icon.png", sizes: "180x180" },
+    ],
+    shortcut: "/icons/pwa/favicon.png",
   },
 };
 
@@ -18,7 +33,7 @@ export const viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#0a0e17",
+  themeColor: "#0ea5e9",
 };
 
 export default function RootLayout({ children }) {
