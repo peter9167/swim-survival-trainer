@@ -1410,7 +1410,17 @@ export default function App() {
                 </div>
               )}
 
-              <button className="start-btn" onClick={beginCountdown}>시작</button>
+              <div className="wait-actions">
+                {m.learnImage && (
+                  <button
+                    className="wait-preview-btn"
+                    onClick={() => setPreviewImage(m.learnImage)}
+                  >
+                    <FontAwesomeIcon icon={ICONS.question} /> 자세 미리보기
+                  </button>
+                )}
+                <button className="start-btn" onClick={beginCountdown}>시작</button>
+              </div>
             </div>
           )}
           {countdown > 0 && (

@@ -3015,6 +3015,38 @@ select:focus-visible {
 .start-wait-card .start-btn:hover::after { transform: translateX(100%); }
 .start-wait-card .start-btn:active { transform: translateY(0) scale(0.98); }
 
+/* 준비 화면 액션 행 (미리보기 + 시작 나란히) */
+.start-wait-card .wait-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.start-wait-card .wait-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-1);
+  border-radius: var(--radius-pill);
+  font-size: 13.5px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.start-wait-card .wait-preview-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+.start-wait-card .wait-preview-btn svg { font-size: 12px; }
+
 /* ════════════════════════════════════════════════════════════════════
    카운트다운 (3, 2, 1)
    ════════════════════════════════════════════════════════════════════ */
